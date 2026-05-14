@@ -28,6 +28,14 @@ Timeline:
 ### Visualization
 ![Acoustic probing experiment results](1778779569118.png)
 
+### Hardware photos
+- Emitter belt assembly: `IMG20260514213337.jpg`
+- Receiver / detector strap: `IMG20260514213901.jpg`
+
+![Emitter belt assembly](IMG20260514213337.jpg)
+
+![Receiver and detector strap](IMG20260514213901.jpg)
+
 ### Why this is potentially cooler than sEMG
 - Works through clothing. sEMG requires direct skin contact, while acoustics propagate through mechanical waves.
 - You can simply press the sensor against pants or integrate it into an exoskeleton.
