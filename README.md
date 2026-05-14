@@ -25,6 +25,9 @@ Timeline:
   - Acoustics: the phase continues to produce the same clear steps as while seated. At 500 Hz, muscle electrical noise is irrelevant; the physical contraction of fibers is detected.
 - 138 s: recalibration. I sit back down. The phase returns to the initial cluster.
 
+### Visualization
+![Acoustic probing experiment results](1778779569118.png)
+
 ### Why this is potentially cooler than sEMG
 - Works through clothing. sEMG requires direct skin contact, while acoustics propagate through mechanical waves.
 - You can simply press the sensor against pants or integrate it into an exoskeleton.
