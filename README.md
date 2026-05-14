@@ -1,47 +1,47 @@
 # microresonance
 
-## Эксперимент: активное акустическое зондирование мышечного волновода
+## Experiment: Active Acoustic Probing of the Muscle Waveguide
 
-### Цель
-Проверить, можно ли извлечь управляющий сигнал из мышцы не через электрическую активность, а через изменение механической импеданса при активном 500 Hz зондировании.
+### Goal
+Test whether a control signal can be extracted from muscle not by electrical activity, but by changes in mechanical impedance during active 500 Hz probing.
 
-### Проблема традиционного sEMG
-- sEMG работает хорошо в лаборатории, но в реальной жизни крайне чувствителен к условиям.
-- Требует裸 кожи, проводящий гель и отсутствие статической нагрузки.
-- Стоит человеку встать, как фоновый шум постуральных мышц «забивает» полезный сигнал.
+### Traditional sEMG problem
+- sEMG works well in the lab, but in real life it is extremely sensitive to conditions.
+- It requires bare skin, conductive gel, and no static load.
+- When the user stands up, background noise from postural muscles quickly masks the useful signal.
 
-### Новая идея
-Вместо того, чтобы ждать нервный импульс, мы несем звуковую несущую 500 Hz через мышцу и наблюдаем, как изменяется механическая импеданс ткани.
+### New approach
+Instead of waiting for nerve impulses, we send a 500 Hz acoustic carrier through the muscle and observe how the tissue's mechanical impedance changes.
 
-### Сессия 175320 (N=1)
-Файл с сырыми данными: `physio_raw_20260514_175320.jsonl`
+### Session 175320 (N=1)
+Raw data file: `physio_raw_20260514_175320.jsonl`
 
-Лог времени:
-- 0–30 сек: отдых. Сидел неподвижно. Дифференциальная фаза X-Y выровнена с отклонением 1.5°. Это «акустический замок».
-- 30–68 сек: изометрические циклы сидя. Напряжение/расслабление каждые 5 сек. Фаза образует четкие «ступени» до 50°. Гироскоп показывает остаток 10°/с — не идеальная фиксация, но результат уже очевиден.
-- 68 сек: изменение позы. Вытягиваю ногу сидя. Геометрия волновода меняется, фаза перекалибруется на новый уровень и стабилизируется. Клик продолжается, отклик сохраняется.
-- 107 сек: ключевой момент — вставание.
-  - sEMG: базовый шум резко вырос из-за статической нагрузки, выделить сознательные клики стало крайне сложно.
-  - Акустика: фаза продолжает давать те же четкие ступени, как и в сидячем состоянии. На 500 Hz «электрический шум» мышцы неважен, определяется физическое сокращение волокон.
-- 138 сек: переладка. Сажусь обратно. Фаза возвращается в начальное кластерное состояние.
+Timeline:
+- 0–30 s: rest. Sitting motionless. The differential phase between X and Y axes is aligned with only a 1.5° deviation. This is the “acoustic lock.”
+- 30–68 s: isometric cycles while seated. Alternate tension and relaxation every 5 seconds. The phase forms distinct steps up to 50°. The gyroscope shows a residual 10°/s — not perfect fixation, but a clear intent signal for a first prototype.
+- 68 s: posture change. I straighten the leg while sitting. The waveguide geometry changes, the phase shifts to a new level and instantly stabilizes. I keep clicking — the response persists.
+- 107 s: moment of truth — standing up.
+  - sEMG: baseline noise increases sharply due to static load, making conscious click detection extremely difficult.
+  - Acoustics: the phase continues to produce the same clear steps as while seated. At 500 Hz, muscle electrical noise is irrelevant; the physical contraction of fibers is detected.
+- 138 s: recalibration. I sit back down. The phase returns to the initial cluster.
 
-### Почему это интереснее sEMG
-- Работает через одежду. sEMG требует прямого контакта с кожей, тогда как акустика передается механическими волнами.
-- Можно просто прижать сенсор к брюкам или встроить его в экзоскелет.
-- Прямая физическая метрика: при каждом сокращении амплитуда на 500 Hz падает, мышца «гасит» звук, становясь плотнее.
-- Это измерение состояния вещества, а не косвенное измерение электрических потенциалов.
-- Дифференциальный профиль и микросекундная синхронизация (TSF) позволяют вычитать общую вибрацию и оставлять только чистый биомеханический сдвиг фазы.
+### Why this is potentially cooler than sEMG
+- Works through clothing. sEMG requires direct skin contact, while acoustics propagate through mechanical waves.
+- You can simply press the sensor against pants or integrate it into an exoskeleton.
+- Direct physical metric: with each contraction, the 500 Hz magnitude drops and the muscle dampens the sound as it becomes denser.
+- This is a direct measurement of material state, not an indirect measurement of electrical potentials.
+- Differential profiling and microsecond synchronization (TSF) allow subtracting global vibration and isolating the pure biomechanical phase shift.
 
-### Результат и выводы
-- Да, это пока N=1.
-- Да, форма фазового «глифа» меняется между прогоном.
-- Но ключевой факт: когда EMG начинает «врать» из-за изменения позы, акустическая импедансная метрика все еще дает четкий сигнал.
+### Results and takeaways
+- Yes, this is still N=1.
+- Yes, the shape of the phase “glyph” varies between runs.
+- But the key fact remains: when EMG starts to fail due to posture change, acoustic impedance still provides a clear signal.
 
-### Что дальше
-- Анализировать сырые JSON/JSONL данные.
-- Развивать универсальный алфавит жестов на основе фазовых профилей.
-- Оценить устойчивость к перемещениям, одежде и внешним механическим помехам.
+### Next steps
+- Analyze the raw JSON/JSONL data.
+- Develop a universal gesture alphabet based on phase profiles.
+- Evaluate robustness to movement, clothing, and external mechanical interference.
 
-### Данные
-Сырые данные лежат в репозитории: `physio_raw_20260514_175320.jsonl`
+### Data
+Raw data is stored in the repository: `physio_raw_20260514_175320.jsonl`
 
