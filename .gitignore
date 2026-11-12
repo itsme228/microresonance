@@ -1,0 +1,17 @@
+# Local development server / experimental UI (tracked separately)
+server/
+microresonance_server/
+
+# Python virtual environments and caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# PlatformIO build artifacts
+.pio/
+.vscode/
+.idea/
+.claude/
+.agents/
+.codex/
