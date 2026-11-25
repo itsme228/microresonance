@@ -1,6 +1,5 @@
-# Local development server / experimental UI (tracked separately)
+# Local research notes / third-party prior-art PDFs / backup archives
 server/
-microresonance_server/
 prior_art/
 123/
 Archive.zip
@@ -18,3 +17,9 @@ __pycache__/
 .claude/
 .agents/
 .codex/
+
+# Go server build artifacts & runtime data
+microresonance_server/receiverd
+microresonance_server/data/
+microresonance_server/certs/
+microresonance_server/config_state.json

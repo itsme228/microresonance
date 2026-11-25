@@ -147,6 +147,11 @@ microresonance/
 │   ├── include/                      # RawSyncPacket (0x4D58) wire format, DSP task & ADS8681 headers
 │   ├── src/                          # Dual-core ADXL355 SPI + LSM6DSOX I2C + sEMG capture & UDP streamer
 │   └── platformio.ini                # Build config for ESP32-S3 (FH4R2)
+├── microresonance_server/            # Go Real-Time Telemetry Server, TSF Lock-In DSP & Dump Recorder
+│   ├── cmd/receiverd/                # Main daemon entrypoint (UDP/TCP ingest, HTTP TSF API, Ebiten/TUI)
+│   ├── internal/domain/              # RawSyncPacket decoder, TSF I/Q demodulator, JSONL physio/raw dumper
+│   ├── internal/app/gui/             # Real-time dashboard (LOCK-IN, FFT, DYN, RAW, XCORR)
+│   └── README.md                     # Server build, flags & dump recording guide
 ├── paper/                            # 4-Page IEEE Preprint (LaTeX, 300-DPI Figures, PDF & Build Script)
 │   ├── microresonance_preprint_draft.pdf  # Compiled 4-page IEEE preprint
 │   ├── microresonance_preprint_draft.tex  # Full LaTeX source
