@@ -1,0 +1,12 @@
+{
+    "pdf_options": {
+        "format": "A4",
+        "displayHeaderFooter": false,
+        "margin": {
+            "top": "4cm",
+            "bottom": "2.5cm",
+            "left": "3cm",
+            "right": "2.5cm"
+        }
+    }
+}

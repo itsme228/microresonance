@@ -1,0 +1,12 @@
+{
+  "nextId": 2,
+  "actions": [
+    {
+      "id": 1,
+      "name": "test_run",
+      "samples": 0,
+      "quality": 0,
+      "lastTrainedMs": 0
+    }
+  ]
+}

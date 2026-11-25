@@ -4,7 +4,6 @@ package gui
 
 import (
 	"fmt"
-	"math"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
@@ -245,54 +244,4 @@ func DrawXcorrScreen(g *gpuGame, screen *ebiten.Image, w, h int) {
 		thumbY := sbY + int(float64(sbH-thumbH)*scrollRatio)
 		vector.FillRect(screen, float32(sbX+1), float32(thumbY), float32(sbW-2), float32(thumbH), clrBtnOn, true)
 	}
-}
-
-// Build1DInvariantMag2 computes rotation-invariant squared magnitude x^2 + y^2 + z^2.
-func Build1DInvariantMag2(x, y, z []float64) []float64 {
-	n := len(x)
-	if len(y) < n {
-		n = len(y)
-	}
-	if len(z) < n {
-		n = len(z)
-	}
-	if n < 8 {
-		return nil
-	}
-	s := make([]float64, n)
-	for i := 0; i < n; i++ {
-		s[i] = x[i]*x[i] + y[i]*y[i] + z[i]*z[i]
-	}
-	return s
-}
-
-// NCC computes normalized cross-correlation between equal-length slices a and b.
-func NCC(a, b []float64) float64 {
-	n := len(a)
-	if len(b) < n {
-		n = len(b)
-	}
-	if n < 2 {
-		return 0
-	}
-	var sumA, sumB float64
-	for i := 0; i < n; i++ {
-		sumA += a[i]
-		sumB += b[i]
-	}
-	meanA := sumA / float64(n)
-	meanB := sumB / float64(n)
-	var cov, varA, varB float64
-	for i := 0; i < n; i++ {
-		da := a[i] - meanA
-		db := b[i] - meanB
-		cov += da * db
-		varA += da * da
-		varB += db * db
-	}
-	denom := math.Sqrt(varA * varB)
-	if denom < 1e-12 {
-		return 0
-	}
-	return cov / denom
 }

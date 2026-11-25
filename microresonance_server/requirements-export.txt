@@ -1,0 +1,6 @@
+# Для export_glyph_onnx.py (конвертация model.keras -> model.onnx)
+# macOS: TF 2.20 падает с mutex — нужен 2.19
+tensorflow>=2.19,<2.20
+# tf2onnx несовместим с NumPy 2.x (np.cast удалён)
+numpy>=1.26,<2.0
+tf2onnx>=1.16

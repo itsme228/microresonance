@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	domainpipeline "server/internal/domain/pipeline"
 	"server/internal/domain/signal"
 )
 
@@ -221,6 +222,8 @@ type ConfigStore struct {
 	statePath            string
 	Version              uint64
 	UpdatedAtMs          int64
+	pendingShapeParamsMu sync.Mutex
+	pendingShapeParams   *domainpipeline.ShapeParams
 
 	// TSF-оффсет: вычисляется из заголовка X-Device-TSF в HTTP-запросах устройств.
 	// tsfOffsetUs = deviceTsfUs - serverUnixUs; позволяет оценить текущий TSF как:
@@ -511,6 +514,23 @@ func (s *ConfigStore) DispatchSyncTrigger(lookAheadUs uint64) bool {
 		s.tsfOffsetUs,
 		lookAheadUs)
 	return true
+}
+
+// GetPendingShapeParams забирает и сбрасывает ожидающие параметры энтропии/алфавита (вызывается из gpu.Update).
+func (s *ConfigStore) GetPendingShapeParams() *domainpipeline.ShapeParams {
+	s.pendingShapeParamsMu.Lock()
+	defer s.pendingShapeParamsMu.Unlock()
+	p := s.pendingShapeParams
+	s.pendingShapeParams = nil
+	return p
+}
+
+// SetPendingShapeParams ставит параметры энтропии/алфавита для применения в следующем кадре (PATCH /api/shape_params).
+func (s *ConfigStore) SetPendingShapeParams(p domainpipeline.ShapeParams) {
+	s.pendingShapeParamsMu.Lock()
+	defer s.pendingShapeParamsMu.Unlock()
+	pc := p
+	s.pendingShapeParams = &pc
 }
 
 func syncProtocolFromTransmitterLocked(p *ProtocolConfig, t *TransmitterConfig) {
@@ -842,6 +862,30 @@ func RegisterHTTPAPI(mux *http.ServeMux, store *ConfigStore, bufs *signal.Buffer
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
 	}))
+	mux.HandleFunc("/api/shape_params", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/shape_params" {
+			http.NotFound(w, r)
+			return
+		}
+		switch r.Method {
+		case http.MethodPatch, http.MethodPut, http.MethodPost:
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			var p domainpipeline.ShapeParams
+			if err := json.Unmarshal(body, &p); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			store.SetPendingShapeParams(p)
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"ok":true}`))
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
 }
 
 // NewConfigStore создаёт хранилище с дефолтными конфигами.

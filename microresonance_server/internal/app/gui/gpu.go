@@ -1,6 +1,5 @@
-// GPU mode: ebiten real-time signal acquisition, FFT spectra, IIR bands,
-// cross-correlation, dynamics, and TSF-coherent 3-axis lock-in dashboard.
-// Run: ./receiverd -gpu -addr=:5555
+// GPU mode: ebiten, FFT spectra, tuning controls. 0.2–40000 Hz.
+// Run: ./server -gpu -addr=:5555
 
 package gui
 
@@ -13,15 +12,19 @@ import (
 	"unicode/utf8"
 
 	"github.com/hajimehoshi/ebiten/v2"
+	"server/internal/domain/alphabet"
+	"server/internal/domain/dynamics"
+	"server/internal/domain/pipeline"
 	"server/internal/domain/signal"
 	"server/internal/ports/httpapi"
+	"server/internal/ports/vrws"
 )
 
 const (
 	headerH       = 20
-	mainTabRowH   = 22
-	contentTopGap = 4
-	sensorRowH    = 20
+	mainTabRowH   = 22 // ряд вкладок SCAN | PATTERNS (под заголовком, над слайдерами)
+	contentTopGap = 4  // отступ между вкладками и строкой сенсора (все экраны)
+	sensorRowH    = 20 // высота строки выбора сенсора
 	sliderH       = 22
 	fftLabelWidth = 56 // label column width (Sensor:, t:, Y:, FFT:)
 	plotPad       = 4
@@ -34,12 +37,13 @@ const (
 	tabH          = 20
 	rowH          = 22
 	btnH          = 18
-	freqMinHz     = 0.2
-	freqMaxHz     = 40000.0
-	adxlYMin      = -1.0
-	adxlYMax      = 1.0
-	adsYMin       = -2.56
-	adsYMax       = 2.56
+	// Frequencies 0.2–40000 Hz; display 0..Fs/2 depending on channel
+	freqMinHz = 0.2
+	freqMaxHz = 40000.0
+	adxlYMin  = -1.0
+	adxlYMax  = 1.0
+	adsYMin   = -2.56
+	adsYMax   = 2.56
 )
 
 var (
@@ -47,7 +51,7 @@ var (
 	clrY     = color.RGBA{0x66, 0xbb, 0x6a, 0xff}
 	clrZ     = color.RGBA{0x42, 0xa5, 0xf5, 0xff}
 	clrADS   = color.RGBA{0xff, 0xca, 0x28, 0xff}
-	clrBg    = color.RGBA{0x20, 0x20, 0x30, 0xff}
+	clrBg    = color.RGBA{0x20, 0x20, 0x30, 0xff} // slightly brighter than original 12,12,1e
 	clrGrd   = color.RGBA{0x2a, 0x2a, 0x38, 0xff}
 	clrGrid  = color.RGBA{0x1e, 0x1e, 0x28, 0xff}
 	clrAcc   = color.RGBA{0x5c, 0x6b, 0xce, 0xff}
@@ -69,12 +73,34 @@ func (r uiRect) contains(mx, my int) bool {
 	return mx >= r.x && mx <= r.x+r.w && my >= r.y && my <= r.y+r.h
 }
 
+// xcorrRectItem — элемент на экране XCORR (чекбокс или график) для клика.
 type xcorrRectItem struct {
 	key        string
 	rect       uiRect
 	isCheckbox bool
 }
 
+// lockedCardRect — карточка токена на вкладке LOCKED (для клика → показ метаданных).
+type lockedCardRect struct {
+	patternID int
+	rect      uiRect
+}
+
+// reactionCardRect — карточка реакции (exciter, band) сверху ALPHABET; клик → попап с цифрами и спектром.
+type reactionCardRect struct {
+	rect  uiRect
+	index int // индекс в ListAll()
+}
+
+type alphabetCardAnimState struct {
+	FromX, FromY float64
+	ToX, ToY     float64
+	StartMs      int64
+	EndMs        int64
+	SeenGen      uint32
+}
+
+// rawPopupBandData — данные одной полосы для всплывающего графика RAW (xB, yB, zB, squared).
 type rawPopupBandData struct {
 	xB, yB, zB, squared []float64
 }
@@ -115,7 +141,7 @@ type sensorGUIState struct {
 	scanEdgeHeatmapBuf  [][32]uint8
 	scanEdgeHeatmapHead int
 	lastHeatmapPkts     uint64
-	waterfallMaxMag     float64
+	waterfallMaxMag     float64 // Smoothed max magnitude for stable waterfall colors
 
 	// Per-axis FFT waterfalls (X, Y, Z) - shared between SCAN and LOCKIN screens
 	lockinHeatX    [][]float64
@@ -138,7 +164,7 @@ type gpuGame struct {
 	dragSlider    string
 	dragValue     float64
 	mousePrev     bool
-	panelTab      string // "EMITTER" | "RECEIVER"
+	panelTab      string // "EMITTER" | "RECEIVER" | "GLYPHS"
 	textFocus     string
 	textCooldown  int
 	inputCooldown int
@@ -147,12 +173,13 @@ type gpuGame struct {
 	// Per-sensor UI state (isolates waterfalls and FFT cache)
 	sensorStates map[int]*sensorGUIState
 
-	// Active main screen: "RAW" (FFT) | "DYN" | "BANDS" (RAW) | "XCORR" | "LOCKIN"
+	// Главный экран: "RAW" | "BANDS" | "DISCOVERY" | "ALPHABET" | "TRAINER" | "MEANING" | "XCORR"
 	mainScreen   string
 	mainTabRects map[string]uiRect
 
-	// Selected sensor for plots (-1 = first available)
+	// Выбранный сенсор для просмотра графиков (-1 = первый доступный)
 	selectedSensorID int
+	// Rect'ы кнопок выбора сенсора (заполняются при отрисовке)
 	sensorDropdownRects []struct {
 		id   int
 		rect uiRect
@@ -162,16 +189,85 @@ type gpuGame struct {
 	scanSessionInputRect uiRect
 	streamCompactRect    uiRect
 	streamRawRect        uiRect
-
-	// XCORR screen state
+	// XCORR: скролл, галочки «использовать для алфавита», rects для кликов
 	xcorrScrollY        int
 	xcorrUseForAlphabet map[string]bool
 	xcorrRects          []xcorrRectItem
 
-	// Performance counters
-	lastDebugLogTs  time.Time
-	perfFrames      int64
-	perfUpdateTotal time.Duration
+	// VR: real-time broadcast glyphs (без тренировки)
+	vrHub *vrws.Hub
+	// Веб-GUI: последняя отправка full_snapshot (throttle по времени, не по тикам)
+	lastWebSnapshotTime      time.Time
+	lastWebHeavySnapshotTime time.Time
+	lastPruneStaleTs         time.Time // троттл вызова RemoveStale по TTL
+	// Кэш "тяжёлой" части full_snapshot (обновляется реже, чем RAW/FFT).
+	cachedGlyphCards         []vrws.VRPatternCard
+	cachedReactionCards      []vrws.VRReactionCard
+	cachedDiscovery          []vrws.VRDiscoveryCell
+	cachedTrainer            vrws.VRTrainerSnapshot
+	cachedMeaning            vrws.VRMeaningSnapshot
+	cachedBandEnergy         [8]float64
+	cachedRawX               []float64
+	cachedRawY               []float64
+	cachedRawZ               []float64
+	cachedRawADS             []float64
+	cachedFftFreqs           []float64
+	cachedFftMagX            []float64
+	cachedFftMagY            []float64
+	cachedFftMagZ            []float64
+	cachedFftMagADS          []float64
+	cachedBandsData          []vrws.VRBandWaveform
+	cachedXcorrPairs         []vrws.VRXcorrPair
+	cachedShapeMetrics       vrws.VRShapeMetrics
+	lastWebGraphSnapshotTime time.Time
+	lastWebXcorrSnapshotTime time.Time
+
+	// Токенизация по форме: кластеры форм + остаточная энтропия
+	shapeClusterStore  *pipeline.ShapeClusterStore
+	residualDecomposer *pipeline.ResidualDecomposer
+	shapeParams        pipeline.ShapePipelineParams
+	// Per-sensor stores: при переключении сенсора показываем данные только выбранного
+	patternStoreBySensor         map[int]*alphabet.PatternStore
+	reactionStoreBySensor        map[int]*alphabet.ReactionAlphabetStore
+	primaryStoreBySensor         map[int]*alphabet.PrimaryAlphabetStore
+	sensorStoresMu               sync.Mutex
+	runStats                     *pipeline.ShapePipelineRunStats
+	sumTotal                     int64
+	sumRejected                  int64
+	sumClassified                int64
+	lastDetectionTs              time.Time
+	detectionInterval            time.Duration
+	lastProcessedPacketsBySensor map[int]uint64 // не запускать pipeline при отсутствии новых пакетов
+
+	// Legacy: частотные кандидаты (для обратной совместимости, не используется в пайплайне по форме)
+	candidateStore *pipeline.CandidateStore
+
+	// Сырой результат детекции (DETECTION DEBUG): что алгоритм считает пиком — всегда показываем во вкладке CANDIDATES
+	lastRawDetection struct {
+		PeakFreq   float64
+		PeakAmp    float64
+		NoiseFloor float64
+		AmpNorm    float64
+		Valid      bool
+	}
+	lastDebugLogTs time.Time // раз в 5 сек пишем в консоль статистику FFT/детекции
+	// Performance debug: куда уходит время кадра Update().
+	perfFrames             int64
+	perfUpdateTotal        time.Duration
+	perfPipeline           time.Duration
+	perfSnapshot           time.Duration
+	perfSnapshotXcorr      time.Duration
+	perfSnapshotGraph      time.Duration
+	perfSnapshotBuild      time.Duration
+	perfSnapshotWS         time.Duration // full dispatch (marshal+cache+broadcast)
+	perfSnapshotMarshal    time.Duration
+	perfSnapshotCacheFull  time.Duration
+	perfSnapshotCacheAlpha time.Duration
+	perfSnapshotBroadcast  time.Duration
+	perfSnapshotHv         time.Duration
+	perfSnapshotBytes      int64
+	perfSnapshotClients    int64
+	// Performance debug (Draw): этапы рендера и время по экрану.
 	perfDrawFrames  int64
 	perfDrawTotal   time.Duration
 	perfDrawLayout  time.Duration
@@ -182,52 +278,151 @@ type gpuGame struct {
 	perfDrawRAW     time.Duration
 	perfDrawBANDS   time.Duration
 	perfDrawXCORR   time.Duration
+	perfDrawDISC    time.Duration
+	perfDrawALPHA   time.Duration
+	perfDrawTRAIN   time.Duration
+	perfDrawMEAN    time.Duration
 	perfDrawSlow33  int64
+	// Pipeline flow counters for compact debug logging.
+	flowPipeRuns         uint64
+	flowPipeSkipNoData   uint64
+	flowPipeSkipInterval uint64
+	flowLastState        string
+	flowLastStateLogTs   time.Time
 
-	// BANDS: causal time-domain IIR filterbank
-	bandFilters       []signal.BandpassFilter
-	bandFiltersFs     float64
+	// Прокрутка списка токенов на вкладке ALPHABET (пиксели вниз)
+	lockedScrollY  int
+	scrollCooldown int // throttle клавиш ↑↓ чтобы не тормозило при удержании
+	// Клик по карточке ALPHABET: показывать metadata (rects заполняются в DrawAlphabetScreen)
+	lockedCardRects         []lockedCardRect
+	lockedSelectedPatternID int    // -1 = не выбрано, 0,1,2… = ID паттерна (чтобы глиф с ID 0 был кликабельным)
+	lockedCompareIDs        [2]int // -1 = слот пуст, иначе ID паттерна для сравнения
+	// Карточки реакций сверху: rects заполняются в DrawAlphabetScreen; клик → попап рядом с курсором
+	reactionCardRects              []reactionCardRect
+	reactionSelectedIndex          int    // -1 = не выбрано, иначе индекс в reactions ListAll()
+	reactionPopupX, reactionPopupY int    // позиция клика (попап рисуется рядом)
+	reactionMinOccurrences         int    // фильтр: показывать только x≥N; 0=все; клик по x≥ — цикл 0,3,5,10
+	glyphTTLSec                    int    // remove glyphs not seen for N sec; 0 = don't remove
+	reactionFilterRect             uiRect // x≥N button, filled in DrawAlphabetScreen
+	alphabetOrderByTop             bool   // when true, list glyphs by Occurrences (top first); when false, store order (no re-sort)
+	alphabetOrderByTopRect         uiRect // checkbox "Order by top", filled in DrawAlphabetScreen
+	// ALPHABET: view toggle — one curve or 3 axes X/Y/Z on card
+	alphabetViewAxes         bool
+	alphabetViewCombinedRect uiRect // кнопка «Combined» — заполняется в DrawAlphabetScreen
+	alphabetViewAxesRect     uiRect // кнопка «3 axes» — заполняется в DrawAlphabetScreen
+	// ALPHABET (3 axes): waveform vs phase portrait (X-Y, Y-Z, X-Z). true = phase portrait (default).
+	alphabetAxesPhasePortrait bool
+	alphabetAxesPortraitRect  uiRect // кнопка «Phase Portrait»
+	alphabetAxesWaveformRect  uiRect // кнопка «Waveform»
+	// ALPHABET: скроллбар — rect трека для перетаскивания мышью; заполняется в DrawAlphabetScreen
+	alphabetScrollbarRect      uiRect
+	alphabetScrollbarMaxScroll int  // maxScroll при последней отрисовке (для пересчёта при drag)
+	alphabetScrollbarDrag      bool // true = перетаскиваем скроллбар
+	alphabetScrollbarWasDrag   bool // true = только что отпустили после перетаскивания (не считать кликом по карточке)
+	// Клик по глифу: попап с анимацией последних N кадров
+	lockedPopupFrames      int     // сколько кадров показывать в анимации (ползунок)
+	lockedPopupFrameSlider float64 // значение ползунка 0..1
+	lockedPopupSliderRect  uiRect  // rect ползунка
+	lockedPopupCloseRect   uiRect  // rect кнопки закрытия
+	lockedPopupStopRect    uiRect  // rect кнопки Play/Pause
+	lockedPopupAnimStop    bool    // true = анимация остановлена
+	// Кэш «last» на карточках: обновляем строку только при смене секунды
+	lockedLastStrCache map[int]string
+	lockedLastSecCache map[int]int64
+	// ALPHABET: стабильный порядок top-режима (обновляется батчами, не каждый кадр)
+	alphabetTopOrderByBand      map[int][]int
+	alphabetTopOrderNextRefresh time.Time
+	alphabetTopOrderWasEnabled  bool
+	// ALPHABET: анимация перемещения карточек между слотами
+	alphabetCardAnimStates      map[int]alphabetCardAnimState
+	alphabetCardAnimGen         uint32
+	alphabetCardAnimLastCleanup time.Time
+
+	// ПОЛОСЫ: IIR bandpass по полосам (каузальный, time-domain), кэш по fs
+	bandFilters   []signal.BandpassFilter
+	bandFiltersFs float64
+	// RAW (экраны BANDS): клик по графику → всплывающее с увеличением; rects заполняются в DrawBandsScreen
 	bandsPlotRects    []uiRect
 	rawPopupOpen      bool
 	rawPopupBandIndex int
 	rawPopupHold      bool
-	rawPopupSnapshot  *rawPopupBandData
-	rawPopupHoldRect  uiRect
-	rawPopupCloseRect uiRect
-	rawPopupBandData  *rawPopupBandData
+	rawPopupSnapshot  *rawPopupBandData // снимок при Hold (заморозка во всплывающем)
+	rawPopupHoldRect  uiRect            // кнопка Hold во всплывающем
+	rawPopupCloseRect uiRect            // кнопка Close во всплывающем
+	rawPopupBandData  *rawPopupBandData // текущие данные полосы для попапа (обновляется в DrawBandsScreen)
 
-	// Emitter manual frequency input state
+	// Последовательности глифов (для пайплайна и TRAINER; экран DYNAMICS удалён)
+	dynamicsStore                 *dynamics.DynamicsStore
+	dynamicsLastID                int      // legacy: один доминант (−1 = нет)
+	dynamicsLastIDPerBand         [8]int   // гистерезис по полосам B0..B7 (−1 = нет)
+	dynamicsSegmentStartMsPerBand [8]int64 // T_start сегмента по полосам (событийная модель)
+
+	// Ручки стабилизации (вкладка LOCKED): T_lock, Δf_lock, ΔA_lock, окно W, стационарность A_cv, A_slope
+	tLockSec   float64 // 0.2 / 0.5 / 1.0 сек
+	deltaFBins int     // ±1 / ±3 / ±5 бинов
+	deltaARel  float64 // 10% / 20% / 25%
+	windowWSec float64 // окно для глифа и стационарности, сек (0.6 по умолчанию)
+	aCv        float64 // std(env)/mean(env) < aCv (0.15)
+	aSlope     float64 // |slope(env)|/mean(env) < aSlope (0.25)
+	// Параметры упрощения/кластеризации по форме (морфология): порог формы + fallback T_shape, T_glyph
+	distThr float64 // порог merge по форме (ShapeDistance < distThr → один токен); ползунок + текстовое поле
+	tShape  float64 // fallback: |log(xy/xy_ref)| + |log(xz/xz_ref)| < tShape
+	tGlyph  float64 // fallback: mean(|glyph_new - glyph_ref|) < tGlyph
+	// Текстовое поле для ввода произвольного значения (distThr)
+	distThrInput        string // буфер ввода
+	distThrInputFocused bool   // фокус для клавиатуры
+
+	// DISCOVERY: поля ввода произвольных чисел (rects заполняются в DrawDiscoveryScreen)
+	discoveryInputRects    map[string]uiRect
+	discoveryInputDistThr  string
+	discoveryInputThrScore string
+	discoveryInputThrH     string
+	discoveryInputSegment  string
+
+	// MANUAL: при Linked=false — какие ручки редактируем (L или R)
 	manualEditChannel       string // "L" | "R"
-	manualFreqExtra         bool
+	manualFreqExtra         bool   // Enable External Freq: true => 1Hz - 12kHz; false => 66.67Hz - 2kHz
 	manualFreqInput         string
 	manualFreqInputIdx      int
 	manualFreqInputFocused  bool
 	manualFreq2Input        string
 	manualFreq2InputFocused bool
 
+	// Контекст для glyph_log (f1, f2, phase, env_type, H_resid)
+	glyphLogCtx alphabet.GlyphLogContext
+	// Отдельный логгер для детального файла глифов (включается флагом -glyph).
+	glyphLogger *log.Logger
+
 	// Runner: STOP = graceful (finish step); PANIC = instant mute
 	runnerMu            sync.Mutex
 	runnerStopRequested bool
 
-	// Reusable scratch buffers
-	fftScratch        *signal.FFTScratch
-	scanFFTScratch    *signal.FFTScratch
-	downSampleScratch *signal.DownSampleScratch
-	sensorScratchX    []float64
-	sensorScratchY    []float64
-	sensorScratchZ    []float64
-	sensorScratchADS  []float64
-	panelLayoutReuse  panelLayout
-	cachedSyncMetrics signal.SyncMetrics
+	// Кэш глифов осциллограмм: пересчёт не чаще 10 Hz на элемент
+	patternOscilloCache   map[int]OscilloCacheEntry
+	candidateOscilloCache map[int]OscilloCacheEntry
 
-	// SCAN / LOCKIN waterfall GPU textures
+	// Переиспользуемые буферы (gpu_pool.go) — меньше аллокаций в Update/Draw
+	fftScratch          *signal.FFTScratch
+	scanFFTScratch      *signal.FFTScratch
+	downSampleScratch   *signal.DownSampleScratch
+	rawDetectionScratch *signal.RawDetectionScratch
+	sensorScratchX      []float64
+	sensorScratchY      []float64
+	sensorScratchZ      []float64
+	sensorScratchADS    []float64
+	panelLayoutReuse    panelLayout
+	cachedSyncMetrics   signal.SyncMetrics
+
+	// SCAN: Heatmap image state (still shared for drawing, but buffer is per-sensor)
 	scanHeatmapImg *ebiten.Image
 	scanHeatmapPix []byte
-	lockinHeatImgs [3]*ebiten.Image
-	scanAxisImgs   [3]*ebiten.Image
+
+	// LOCKIN: Heatmap image state
+	lockinHeatImgs [3]*ebiten.Image // LOCKIN screen images
+	scanAxisImgs   [3]*ebiten.Image // SCAN screen images (same data, separate GPU textures)
 	lockinHeatPix  []byte
 
-	// LOCKIN: live result history
+	// LOCKIN: live result history (selected sensor only for now)
 	lockinHistDXY  []float64
 	lockinHistDYZ  []float64
 	lockinHistDXZ  []float64
@@ -235,36 +430,83 @@ type gpuGame struct {
 	lockinHistMagY []float64
 	lockinHistMagZ []float64
 
+	// TRAINER: Actions, калибровка REST/DO/RELAX
+	trainerActionStore      *ActionStore
+	trainerSelectedActionID int
+	trainerPlannedSequence  []int // выбранная последовательность A→B→C для тренинга; клик по действию добавляет в конец
+	trainerCalibrateLoop    *CalibrateLoop
+	trainerNewActionName    string
+	trainerRects            map[string]uiRect
+	trainerActionRects      []trainerActionRect
+	trainerRenameInput      string
+	trainerGlyphRecorder    *GlyphStreamRecorder
+	trainerGlyphBuffer      *GlyphShapeBuffer       // буфер глифов (legacy)
+	trainerEventBuffer      *TrainerEventBufferImpl // буфер glyph-event'ов для калибровки → event-based датасет
+	trainerReactionBuffer   *RunReactionBuffer      // буфер reaction-векторов за сегмент [Start..End] для датасета
+
+	// MEANING (СМЫСЛ): таблица токен + счётчик, распознавание модели TF
+	meaningContentTop int               // верх области контента (обновляется в DrawMeaningScreen)
+	meaningContentH   int               // высота области контента (обновляется в Draw)
+	mlLastPrediction  MLPrediction      // последнее предсказание модели (имя действия, confidence)
+	mlWorker          *MLWorker         // инференс через Python run_ml_queue_model.py; nil если модели нет
+	meaningCounters   map[string]int    // счётчик появлений по имени действия (обновляется из предиктора)
+	meaningCountersMu sync.Mutex        // защита meaningCounters (пишет горутина предиктора)
+	meaningRects      map[string]uiRect // кнопки на вкладке MEANING (meaningReset и т.д.)
+	// Последний reaction по полосе для MEANING (обновляется в OnReactionGlyph, не очищается при Start/End)
+	meaningReactionByBand      [8][alphabet.ReactionPhaseBins]float64
+	meaningReactionTsByBand    [8]int64
+	meaningReactionValidByBand [8]bool
+
+	// ML-очереди (новая архитектура: FrameSummary, EventGlyph, EventReaction)
+	mlQueue            *MLQueueImpl
+	lastFrameSummaryMs int64
+
+	// История количества токенов с начала сессии для графика динамики.
+	tokenTrendEnabled      bool
+	tokenHistory           []int
+	tokenHistoryStart      time.Time
+	tokenHistoryNextSample time.Time
+	tokenHistoryStrideSec  int
+
+	// TOMOGRAPHY (Томография)
+	tomoSensorMap  map[string]int
+	tomoPartsRects map[string]uiRect
+	tomoMode       string // "Absolute" or "Difference"
+	tomoViewMode   string // "Quantum" or "Circular"
+	tomoMaxAmp     map[string]float64
+	tomoMaxRMS     map[string]float64
+	tomoFFTScratch *signal.FFTScratch
+
 	// DYNAMICS screen history (sampled at Draw rate, capped at 5000 pts)
-	dynHistPhase      []float64
-	dynHistMag        []float64
-	dynHistMagX       []float64
-	dynHistMagY       []float64
-	dynHistDeltaXY    []float64
-	dynHistDeltaYZ    []float64
-	dynHistDeltaZX    []float64
-	dynHistMagTotal   []float64
-	dynHistPhaseX     []float64
-	dynHistPhaseY     []float64
-	dynHistPhaseZ     []float64
-	dynHistVel        []float64
-	dynHistJitter     []float64
+	dynHistPhase      []float64 // carrier phase after tare (deg)
+	dynHistMag        []float64 // Z lock-in magnitude (g)
+	dynHistMagX       []float64 // X lock-in magnitude (g)
+	dynHistMagY       []float64 // Y lock-in magnitude (g)
+	dynHistDeltaXY    []float64 // ΔΦ_XY (deg)
+	dynHistDeltaYZ    []float64 // ΔΦ_YZ (deg)
+	dynHistDeltaZX    []float64 // ΔΦ_ZX = Φ_Z − Φ_X (deg)
+	dynHistMagTotal   []float64 // √(MagX²+MagY²+MagZ²) (g)
+	dynHistPhaseX     []float64 // absolute Φ_X (deg)
+	dynHistPhaseY     []float64 // absolute Φ_Y (deg)
+	dynHistPhaseZ     []float64 // absolute Φ_Z (deg)
+	dynHistVel        []float64 // phase velocity (deg/s)
+	dynHistJitter     []float64 // TSF jitter (µs)
 	dynHistTsf        []float64
-	dynHistSNR        []float64
-	dynPhaseZero      float64
-	dynLastDspTsf     uint64
-	dynLockinHardLock bool
+	dynHistSNR        []float64 // carrier SNR (dB)
+	dynPhaseZero      float64   // tare offset (deg)
+	dynLastDspTsf     uint64    // detect new DSP packet
+	dynLockinHardLock bool      // cached from s.LockinHardLock (set while mutex held)
 
 	// Orbit trail for DYN screen: polar Z, and phase-phase Lissajous
 	dynOrbitTrail []struct {
 		P float64
 		M float64
 	}
-	dynOrbitXY [][2]float64
-	dynOrbitYZ [][2]float64
-	dynOrbitXZ [][2]float64
+	dynOrbitXY [][2]float64 // (ΦX, ΦY) trail
+	dynOrbitYZ [][2]float64 // (ΦY, ΦZ) trail
+	dynOrbitXZ [][2]float64 // (ΦX, ΦZ) trail
 
-	// DYN plot checkbox state (key -> enabled)
+	// DYN plot checkbox state (key → enabled); persisted to config file
 	dynPlotEnabled   map[string]bool
 	dynCheckboxRects []struct {
 		key  string
@@ -273,12 +515,86 @@ type gpuGame struct {
 	dynVoiceBtnRect uiRect
 
 	// Manual Zoom
-	zoomX float64
-	zoomY float64
+	zoomX float64 // 1.0 = default
+	zoomY float64 // 1.0 = default
+
+	// AVN (Acoustic Vector Navigation)
+	avn avnState
+
+	// TOMO (Mission Control) State
+	tomoPhantoms     []tomoPhantom
+	tomoLiveBalanceX float64 // (ΔΦL - ΔΦR)
+	tomoLiveBalanceY float64 // (MagL + MagR)
+	tomoLiveTwist    float64 // (PhaseL - PhaseR)
+	tomoLiveSmoothX  float64
+	tomoLiveSmoothY  float64
+	tomoBalanceTrail [][2]float64
+
+	// BCI RPG System
+	tomoCastLevel   float64            // 0..1 current fireball charge
+	tomoActiveBuffs map[string]float64 // name -> intensity/duration
+}
+
+type tomoPhantom struct {
+	Name     string
+	X, Y     float64    // centroid in balance space
+	Triangle [3]float64 // ΔXY, ΔYZ, ΔZX reference
+}
+
+type avnState struct {
+	Enabled     bool
+	Calibration avnCalibration
+	Live        avnLiveState
+	Recording   string // "REST", "UP", etc.
+	RecBuffer   [][3]float64
+	RecVel      []float64
+	LiveTrail   [][2]float64
+	Counts      map[string]int // Number of samples per step
+}
+
+type avnCalibration struct {
+	Rest        [3]float64
+	Up          [3]float64
+	Down        [3]float64
+	Left        [3]float64
+	Right       [3]float64
+	MaxDelta    float64
+	ClickVel    float64
+	UseZClick   bool
+	Initialized bool
+}
+
+type avnLiveState struct {
+	X, Y             float64
+	SmoothX, SmoothY float64
+	Vel              float64
+	IsClick          bool
+	RawX, RawY       float64
+	LastLog          time.Time
 }
 
 func (g *gpuGame) Layout(outsideWidth, outsideHeight int) (int, int) {
 	return outsideWidth, outsideHeight
+}
+
+// meaningIncrCounter увеличивает счётчик по имени действия (вызывается из предиктора при каждом предсказании).
+func (g *gpuGame) meaningIncrCounter(name string) {
+	if name == "" {
+		return
+	}
+	g.meaningCountersMu.Lock()
+	defer g.meaningCountersMu.Unlock()
+	if g.meaningCounters == nil {
+		g.meaningCounters = make(map[string]int)
+	}
+	g.meaningCounters[name]++
+}
+
+// meaningResetCounters обнуляет счётчики на вкладке MEANING.
+func (g *gpuGame) meaningResetCounters() {
+	g.meaningCountersMu.Lock()
+	g.meaningCounters = make(map[string]int)
+	g.meaningCountersMu.Unlock()
 }
 
 func clamp(v, lo, hi float64) float64 {
@@ -302,6 +618,27 @@ func panelWidth(w int) int {
 	return pw
 }
 
+func cycleString(cur string, list []string, dir int) string {
+	if len(list) == 0 {
+		return cur
+	}
+	idx := 0
+	for i, v := range list {
+		if v == cur {
+			idx = i
+			break
+		}
+	}
+	idx += dir
+	if idx < 0 {
+		idx = len(list) - 1
+	}
+	if idx >= len(list) {
+		idx = 0
+	}
+	return list[idx]
+}
+
 func (g *gpuGame) buildPanelLayout(w, h int) panelLayout {
 	pw := panelWidth(w)
 	if pw == 0 {
@@ -312,7 +649,7 @@ func (g *gpuGame) buildPanelLayout(w, h int) panelLayout {
 	switch g.mainScreen {
 	case "RAW":
 		y0 += contentTopGap + sensorRowH + 4 + sliderH
-	case "BANDS":
+	case "BANDS", "DISCOVERY", "ALPHABET":
 		y0 += contentTopGap + sensorRowH + 4
 	}
 	hh := h - y0 - 6
@@ -341,7 +678,7 @@ func (g *gpuGame) buildPanelLayout(w, h int) panelLayout {
 	lay.w = pw
 	lay.h = hh
 
-	tabNames := []string{"EMITTER", "RECEIVER"}
+	tabNames := []string{"EMITTER", "RECEIVER", "GLYPHS"}
 	tabW := (pw - 2*panelPad) / len(tabNames)
 	tx := x0 + panelPad
 	ty := y0
@@ -365,7 +702,7 @@ func (g *gpuGame) buildPanelLayout(w, h int) panelLayout {
 	}
 
 	tab := g.panelTab
-	if tab == "" || (tab != "EMITTER" && tab != "RECEIVER") {
+	if tab == "" {
 		tab = "EMITTER"
 	}
 
@@ -397,7 +734,7 @@ func (g *gpuGame) buildPanelLayout(w, h int) panelLayout {
 				RightLevel:   float64(g.protocol.Intensity),
 			})
 			if g.protocol.Tones[0].Freq <= 0 {
-				g.protocol.Tones[0].Freq = 500.0
+				g.protocol.Tones[0].Freq = 311.0
 			}
 			if g.protocol.Tones[0].LeftLevel <= 0 {
 				g.protocol.Tones[0].LeftLevel = 50.0
@@ -474,6 +811,40 @@ func (g *gpuGame) buildPanelLayout(w, h int) panelLayout {
 		lay.buttons["sync_phase_metrics"] = r
 		r = row(60)
 		lay.buttons["sync_sensors_disp"] = r
+
+	case "GLYPHS":
+		r := row(btnH)
+		lay.buttons["entropy_sep"] = r
+		r = row(rowH)
+		lay.sliders["h_thr"] = sliderDef{rect: r, min: 0.05, max: 0.95, step: 0.02}
+		r = row(rowH)
+		lay.sliders["min_delta_h"] = sliderDef{rect: r, min: 0.0001, max: 0.05, step: 0.0001}
+		r = row(rowH)
+		lay.sliders["dist_thr"] = sliderDef{rect: r, min: 0.05, max: 0.8, step: 0.02}
+		r = row(rowH)
+		lay.sliders["min_cos"] = sliderDef{rect: r, min: -1.0, max: 1.0, step: 0.02}
+		r = row(rowH)
+		lay.sliders["max_freq_ratio"] = sliderDef{rect: r, min: 1.0, max: 3.0, step: 0.05}
+		r = row(rowH)
+		lay.sliders["zoom_x"] = sliderDef{rect: r, min: 0.1, max: 10.0, step: 0.1}
+		r = row(rowH)
+		lay.sliders["zoom_y"] = sliderDef{rect: r, min: 0.1, max: 10.0, step: 0.1}
+		r = row(rowH)
+		lay.sliders["adjacent_dist_thr"] = sliderDef{rect: r, min: 0.2, max: 0.8, step: 0.02}
+		r = row(rowH)
+		lay.sliders["hysteresis_margin"] = sliderDef{rect: r, min: 0.0, max: 0.2, step: 0.01}
+		r = row(rowH)
+		lay.sliders["ultra_strong_dist"] = sliderDef{rect: r, min: 0.001, max: 0.05, step: 0.001}
+		r = row(btnH)
+		lay.buttons["x_ge"] = r
+		r = row(rowH)
+		lay.sliders["glyph_ttl_sec"] = sliderDef{rect: r, min: 0, max: 600, step: 30}
+		r = row(rowH)
+		lay.buttons["entropy_metrics"] = r
+		r = row(btnH)
+		lay.buttons["token_history_toggle"] = r
+		r = row(52)
+		lay.buttons["token_histogram"] = r
 	}
 	return *lay
 }
@@ -483,12 +854,19 @@ const (
 	windowMs = 450
 )
 
+// FAST SCAN: 80–1200 Hz log steps, L → R → BOTH, 450ms/step, 300ms pause between channels
 var fastScanFreqs = []float64{80, 100, 125, 160, 200, 250, 315, 400, 500, 630, 800, 1000, 1200}
+
+// PHASE SCAN: BOTH, freqs 200/400/800, each: 0° 2s, pause 300ms, 180° 2s, pause 500ms
 var phaseScanFreqs = []float64{200, 400, 800}
+
+// DUAL ASYM: pairs (fL, fR); 2s hold + 500ms pause
 var dualAsymPairs = [][2]float64{{311, 401}, {250, 315}, {400, 500}, {500, 630}}
-var probingPhaseDegs = []int{0, 90, 120, 180}
-var probingBeatsPairs = [][2]float64{{300, 304}, {400, 406}, {250, 256}, {500, 505}}
-var probingDualPairs = [][2]float64{{200, 650}, {250, 700}, {280, 800}}
+
+// Режимы зондирования A/B/C/D (два эксайдера, envelope обязательна).
+var probingPhaseDegs = []int{0, 90, 120, 180}                                        // A: f1=f2, разные фазы
+var probingBeatsPairs = [][2]float64{{300, 304}, {400, 406}, {250, 256}, {500, 505}} // B: биения |Δf| 2–8 Гц
+var probingDualPairs = [][2]float64{{200, 650}, {250, 700}, {280, 800}}              // C: f1∈180–300, f2∈600–900
 
 func (g *gpuGame) shouldStopRunner() bool {
 	g.runnerMu.Lock()
@@ -508,6 +886,7 @@ func (g *gpuGame) requestStopRunner() {
 	g.runnerMu.Unlock()
 }
 
+// runPresetSteps запускает пресет в горутине: обновляет store по шагам; STOP = graceful, PANIC = уже в протоколе.
 func (g *gpuGame) runPresetSteps(presetName string) {
 	g.runnerMu.Lock()
 	g.runnerStopRequested = false
@@ -625,6 +1004,8 @@ func (g *gpuGame) runPresetSteps(presetName string) {
 	log.Printf("preset=%s finished sessionState=stopped", presetName)
 }
 
+// runProbingMode запускает режим зондирования A/B/C/D (два эксайдера, envelope 0.3–6 Гц, глубина 0.3–0.6).
+// A: f1=f2, фазы 0°/90°/120°/180°. B: биения |Δf|=2–8 Гц. C: разные carrier, одинаковая envelope. D: противофазная envelope.
 func (g *gpuGame) runProbingMode(mode string) {
 	g.runnerMu.Lock()
 	g.runnerStopRequested = false
@@ -786,6 +1167,7 @@ func (g *gpuGame) getSensorState(id int) *sensorGUIState {
 	return g.sensorStates[id]
 }
 
+// getSelectedSensorID возвращает ID сенсора для отображения.
 func (g *gpuGame) getSelectedSensorID() uint8 {
 	ids := g.buf.ListSensors()
 	if len(ids) == 0 {
@@ -802,8 +1184,52 @@ func (g *gpuGame) getSelectedSensorID() uint8 {
 	return ids[0]
 }
 
+// getSelectedSensorData возвращает X,Y,Z,ADS для выбранного сенсора (буферы переиспользуются, не аллоцировать).
 func (g *gpuGame) getSelectedSensorData() (x, y, z, ads []float64) {
 	id := g.getSelectedSensorID()
 	g.buf.GetSensorDataInto(id, &g.sensorScratchX, &g.sensorScratchY, &g.sensorScratchZ, &g.sensorScratchADS)
 	return g.sensorScratchX, g.sensorScratchY, g.sensorScratchZ, g.sensorScratchADS
+}
+
+// getPatternStore возвращает PatternStore для сенсора sensorID (создаёт при необходимости).
+func (g *gpuGame) getPatternStore(sensorID int) *alphabet.PatternStore {
+	g.sensorStoresMu.Lock()
+	defer g.sensorStoresMu.Unlock()
+	if g.patternStoreBySensor == nil {
+		g.patternStoreBySensor = make(map[int]*alphabet.PatternStore)
+	}
+	if g.patternStoreBySensor[sensorID] == nil {
+		ps := &alphabet.PatternStore{}
+		if g.glyphLogger != nil {
+			ps.SetGlyphLogger(g.glyphLogger)
+		}
+		g.patternStoreBySensor[sensorID] = ps
+	}
+	return g.patternStoreBySensor[sensorID]
+}
+
+// getReactionAlphabetStore возвращает ReactionAlphabetStore для сенсора sensorID (создаёт при необходимости).
+func (g *gpuGame) getReactionAlphabetStore(sensorID int) *alphabet.ReactionAlphabetStore {
+	g.sensorStoresMu.Lock()
+	defer g.sensorStoresMu.Unlock()
+	if g.reactionStoreBySensor == nil {
+		g.reactionStoreBySensor = make(map[int]*alphabet.ReactionAlphabetStore)
+	}
+	if g.reactionStoreBySensor[sensorID] == nil {
+		g.reactionStoreBySensor[sensorID] = alphabet.NewReactionAlphabetStore()
+	}
+	return g.reactionStoreBySensor[sensorID]
+}
+
+// getPrimaryAlphabetStore возвращает PrimaryAlphabetStore для сенсора sensorID (создаёт при необходимости).
+func (g *gpuGame) getPrimaryAlphabetStore(sensorID int) *alphabet.PrimaryAlphabetStore {
+	g.sensorStoresMu.Lock()
+	defer g.sensorStoresMu.Unlock()
+	if g.primaryStoreBySensor == nil {
+		g.primaryStoreBySensor = make(map[int]*alphabet.PrimaryAlphabetStore)
+	}
+	if g.primaryStoreBySensor[sensorID] == nil {
+		g.primaryStoreBySensor[sensorID] = alphabet.NewPrimaryAlphabetStore()
+	}
+	return g.primaryStoreBySensor[sensorID]
 }

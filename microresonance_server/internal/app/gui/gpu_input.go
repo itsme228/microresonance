@@ -27,8 +27,13 @@ func (g *gpuGame) handleInput() {
 			if r.contains(mx, my) {
 				g.mainScreen = name
 				g.inputCooldown = 10 // Prevent bounce when switching tabs
-				g.textFocus = ""
-				return
+				if name == "ALPHABET" {
+					g.textFocus = ""
+					g.reactionSelectedIndex = -1
+					g.lockedSelectedPatternID = -1
+					g.lockedCompareIDs = [2]int{-1, -1}
+				}
+				return // Обработали клик по вкладке
 			}
 		}
 
@@ -97,6 +102,209 @@ func (g *gpuGame) handleInput() {
 				}
 			}
 		}
+	case "ALPHABET":
+		if g.lockedSelectedPatternID >= 0 {
+			if clicked {
+				if g.lockedPopupCloseRect.contains(mx, my) {
+					g.lockedSelectedPatternID = -1
+					return
+				}
+				if g.lockedPopupStopRect.contains(mx, my) {
+					g.lockedPopupAnimStop = !g.lockedPopupAnimStop
+					return
+				}
+			}
+			if mouseDown && g.lockedPopupSliderRect.contains(mx, my) {
+				r := g.lockedPopupSliderRect
+				v := float64(mx-r.x) / float64(r.w)
+				if v < 0 {
+					v = 0
+				}
+				if v > 1 {
+					v = 1
+				}
+				g.lockedPopupFrameSlider = v
+				g.lockedPopupFrames = 1 + int(v*float64(maxLastNShapes-1)) // 1..256
+			}
+			// If popup is open, don't process other ALPHABET clicks
+			if clicked || mouseDown {
+				return
+			}
+		}
+		if clicked {
+			if g.alphabetScrollbarWasDrag {
+				g.alphabetScrollbarWasDrag = false
+			} else {
+				ctrlHeld := ebiten.IsKeyPressed(ebiten.KeyControl) || ebiten.IsKeyPressed(ebiten.KeyControlLeft)
+				cardHit := false
+				// Реакции
+				for _, rc := range g.reactionCardRects {
+					if rc.rect.contains(mx, my) {
+						cardHit = true
+						if g.reactionSelectedIndex == rc.index {
+							g.reactionSelectedIndex = -1
+						} else {
+							g.reactionSelectedIndex = rc.index
+							g.reactionPopupX, g.reactionPopupY = mx, my
+						}
+						g.lockedSelectedPatternID = -1
+						g.lockedCompareIDs[0], g.lockedCompareIDs[1] = -1, -1
+						break
+					}
+				}
+				if !cardHit {
+					// Токены
+					for _, cr := range g.lockedCardRects {
+						if cr.rect.contains(mx, my) {
+							cardHit = true
+							g.reactionSelectedIndex = -1
+							if ctrlHeld {
+								// Compare mode
+								// ... simplify for now, can restore later
+							} else {
+								if cr.patternID == g.lockedSelectedPatternID {
+									g.lockedSelectedPatternID = -1
+								} else {
+									g.lockedSelectedPatternID = cr.patternID
+								}
+								g.lockedCompareIDs[0], g.lockedCompareIDs[1] = -1, -1
+							}
+							break
+						}
+					}
+				}
+				if !cardHit {
+					// Checkboxes and toggles
+					if g.alphabetOrderByTopRect.w > 0 && g.alphabetOrderByTopRect.contains(mx, my) {
+						g.alphabetOrderByTop = !g.alphabetOrderByTop
+						g.alphabetTopOrderNextRefresh = time.Time{}
+					} else if g.reactionFilterRect.w > 0 && g.reactionFilterRect.contains(mx, my) {
+						// x>=N filter cycle
+						switch g.reactionMinOccurrences {
+						case 0:
+							g.reactionMinOccurrences = 3
+						case 3:
+							g.reactionMinOccurrences = 5
+						case 5:
+							g.reactionMinOccurrences = 10
+						default:
+							g.reactionMinOccurrences = 0
+						}
+					} else if g.alphabetViewCombinedRect.contains(mx, my) {
+						g.alphabetViewAxes = false
+					} else if g.alphabetViewAxesRect.contains(mx, my) {
+						g.alphabetViewAxes = true
+						g.alphabetAxesPhasePortrait = true
+					} else if g.alphabetAxesPortraitRect.contains(mx, my) {
+						g.alphabetAxesPhasePortrait = true
+					} else if g.alphabetAxesWaveformRect.contains(mx, my) {
+						g.alphabetAxesPhasePortrait = false
+					}
+				}
+			}
+		}
+		// Scrolling
+		const scrollStep = 48
+		if _, wy := ebiten.Wheel(); wy != 0 {
+			g.lockedScrollY += int(wy * scrollStep)
+		}
+		if g.lockedScrollY < 0 {
+			g.lockedScrollY = 0
+		}
+
+		// Scrollbar drag
+		if g.alphabetScrollbarRect.w > 0 {
+			if !mouseDown {
+				if g.alphabetScrollbarDrag {
+					g.alphabetScrollbarWasDrag = true
+				}
+				g.alphabetScrollbarDrag = false
+			} else if g.alphabetScrollbarDrag {
+				r := g.alphabetScrollbarRect
+				scrollRatio := float64(my-r.y) / float64(r.h)
+				if scrollRatio < 0 {
+					scrollRatio = 0
+				}
+				if scrollRatio > 1 {
+					scrollRatio = 1
+				}
+				maxSc := g.alphabetScrollbarMaxScroll
+				if maxSc > 0 {
+					g.lockedScrollY = int(scrollRatio * float64(maxSc))
+				}
+			} else if g.alphabetScrollbarRect.contains(mx, my) && mouseDown {
+				g.alphabetScrollbarDrag = true
+			}
+		}
+	case "TRAINER":
+		if clicked {
+			for _, ar := range g.trainerActionRects {
+				if ar.rect.contains(mx, my) {
+					g.trainerSelectedActionID = ar.actionID
+					g.inputCooldown = 15
+					// Add to sequence if not calibrating
+					if g.trainerCalibrateLoop == nil && g.trainerActionStore != nil {
+						seq := g.trainerPlannedSequence
+						if len(seq) == 0 || seq[len(seq)-1] != ar.actionID {
+							g.trainerPlannedSequence = append(append([]int(nil), seq...), ar.actionID)
+						}
+					}
+					break
+				}
+			}
+			// Buttons
+			if g.trainerRects != nil {
+				if r, ok := g.trainerRects["newAction"]; ok && r.contains(mx, my) {
+					g.inputCooldown = 20
+					if g.trainerActionStore != nil {
+						n := len(g.trainerActionStore.List()) + 1
+						name := fmt.Sprintf("action_%d", n)
+						a := g.trainerActionStore.Add(name, "")
+						g.trainerSelectedActionID = a.ID
+					}
+				} else if r, ok := g.trainerRects["clearSequence"]; ok && r.contains(mx, my) {
+					g.inputCooldown = 15
+					g.trainerPlannedSequence = nil
+				} else if r, ok := g.trainerRects["stop"]; ok && r.contains(mx, my) {
+					g.inputCooldown = 15
+					g.requestStopRunner()
+				} else if r, ok := g.trainerRects["avn_toggle"]; ok && r.contains(mx, my) {
+					g.inputCooldown = 15
+					g.avn.Enabled = !g.avn.Enabled
+				} else if r, ok := g.trainerRects["avn_reset"]; ok && r.contains(mx, my) {
+					g.inputCooldown = 20
+					g.avn.Calibration = avnCalibration{}
+					g.avn.Counts = make(map[string]int)
+					g.avn.Enabled = false
+					g.avn.Recording = ""
+					log.Printf("[AVN] Calibration reset by user")
+				} else {
+					// AVN Recording Steps
+					steps := []string{"REST", "UP", "DOWN", "LEFT", "RIGHT"}
+					for _, step := range steps {
+						if r, ok := g.trainerRects["avn_rec_"+step]; ok && r.contains(mx, my) {
+							g.inputCooldown = 20
+							if g.avn.Recording == step {
+								g.avnProcessRecording(step)
+								g.avn.Recording = ""
+							} else {
+								g.avn.Recording = step
+								g.avn.RecBuffer = nil
+								g.avn.RecVel = nil
+							}
+							return
+						}
+					}
+				}
+				// ... more trainer buttons if needed
+			}
+		}
+	case "MEANING":
+		if clicked && g.meaningRects != nil {
+			if r, ok := g.meaningRects["meaningReset"]; ok && r.contains(mx, my) {
+				g.meaningResetCounters()
+			}
+		}
 	case "XCORR":
 		if clicked {
 			for _, xr := range g.xcorrRects {
@@ -113,6 +321,58 @@ func (g *gpuGame) handleInput() {
 			g.xcorrScrollY += int(wy * 48)
 			if g.xcorrScrollY < 0 {
 				g.xcorrScrollY = 0
+			}
+		}
+
+	case "TOMO":
+		if clicked {
+			for partName, r := range g.tomoPartsRects {
+				if r.contains(mx, my) {
+					g.inputCooldown = 15
+
+					if _, ok := g.tomoSensorMap[partName]; ok {
+						// Already bound -> Unbind
+						delete(g.tomoSensorMap, partName)
+						log.Printf("[TOMO] Unbound %s", partName)
+					} else {
+						// Not bound -> Find first available unassigned sensor
+						assigned := make(map[int]bool)
+						for _, s := range g.tomoSensorMap {
+							assigned[s] = true
+						}
+
+						ids := g.buf.ListSensors()
+						boundAny := false
+						for _, sid := range ids {
+							if !assigned[int(sid)] {
+								g.tomoSensorMap[partName] = int(sid)
+								log.Printf("[TOMO] Auto-bound S%d to %s", sid, partName)
+								boundAny = true
+								break
+							}
+						}
+						if !boundAny {
+							log.Printf("[TOMO] No free sensors to bind to %s", partName)
+						}
+					}
+
+					// Persist
+					p := g.store.GetProtocol()
+					p.TomoSensorMap = make(map[string]int)
+					for k, v := range g.tomoSensorMap {
+						p.TomoSensorMap[k] = v
+					}
+					g.store.SetProtocol(p)
+					break
+				}
+			}
+			if modeRect, ok := g.tomoPartsRects["mode_toggle"]; ok && modeRect.contains(mx, my) {
+				g.inputCooldown = 15
+				if g.tomoViewMode == "Quantum" {
+					g.tomoViewMode = "Circular"
+				} else {
+					g.tomoViewMode = "Quantum"
+				}
 			}
 		}
 	}
@@ -390,6 +650,28 @@ func (g *gpuGame) applySliderValue(id string, val float64) {
 		if g.store != nil {
 			g.store.SetProtocol(g.protocol)
 		}
+	case "h_thr":
+		g.shapeParams.HThr = val
+	case "min_delta_h":
+		g.shapeParams.MinDeltaH = val
+	case "dist_thr":
+		g.distThr = val
+		g.shapeParams.DistThr = val
+		if g.shapeClusterStore != nil {
+			g.shapeClusterStore.SetDistThr(val)
+		}
+	case "min_cos":
+		g.shapeParams.MinCos = val
+	case "max_freq_ratio":
+		g.shapeParams.MaxFreqRatio = val
+	case "adjacent_dist_thr":
+		g.shapeParams.AdjacentDistThr = val
+	case "hysteresis_margin":
+		g.shapeParams.HysteresisMargin = val
+	case "ultra_strong_dist":
+		g.shapeParams.UltraStrongDist = val
+	case "glyph_ttl_sec":
+		g.glyphTTLSec = int(val)
 	case "phase_l":
 		g.protocol.PhaseL = int(val)
 		if g.store != nil {
@@ -601,6 +883,17 @@ func (g *gpuGame) handlePanelButton(id string) {
 		g.manualEditChannel = "L"
 	case "edit_r":
 		g.manualEditChannel = "R"
+	case "x_ge":
+		switch g.reactionMinOccurrences {
+		case 0:
+			g.reactionMinOccurrences = 3
+		case 3:
+			g.reactionMinOccurrences = 5
+		case 5:
+			g.reactionMinOccurrences = 10
+		default:
+			g.reactionMinOccurrences = 0
+		}
 	case "run_auto_scan":
 		go g.runPresetSteps("am-sine")
 	case "run_burst":
@@ -623,6 +916,8 @@ func (g *gpuGame) handlePanelButton(id string) {
 		go g.runProbingMode("D")
 	case "stop":
 		g.requestStopRunner()
+	case "token_history_toggle":
+		g.tokenTrendEnabled = !g.tokenTrendEnabled
 	case "sync_trigger":
 		if g.store != nil {
 			if !g.store.DispatchSyncTrigger(800_000) {

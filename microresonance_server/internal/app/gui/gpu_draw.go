@@ -3,6 +3,7 @@ package gui
 import (
 	"fmt"
 	"image/color"
+	"log"
 	"math"
 	"time"
 
@@ -11,6 +12,150 @@ import (
 	"github.com/hajimehoshi/ebiten/v2/vector"
 )
 
+// occurrenceHistogramBuckets: 1, 2-4, 5-9, 10-99, 100+
+const occurrenceHistogramBuckets = 5
+
+func occurrenceBucket(occ int) int {
+	switch {
+	case occ == 1:
+		return 0
+	case occ <= 4:
+		return 1
+	case occ <= 9:
+		return 2
+	case occ <= 99:
+		return 3
+	default:
+		return 4
+	}
+}
+
+func (g *gpuGame) drawTokenHistogram(screen *ebiten.Image, r uiRect) {
+	var hist [occurrenceHistogramBuckets]int
+	for _, sid := range g.buf.ListSensors() {
+		ps := g.getPatternStore(int(sid))
+		if ps == nil {
+			continue
+		}
+		for _, p := range ps.ListOrderedByTop() {
+			b := occurrenceBucket(p.Occurrences)
+			if b >= 0 && b < occurrenceHistogramBuckets {
+				hist[b]++
+			}
+		}
+	}
+	labels := []string{"1", "2-4", "5-9", "10-99", "100+"}
+	titleH := 10
+	barH := r.h - titleH - 12
+	if barH < 4 {
+		barH = 4
+	}
+	barY := r.y + titleH
+	maxCount := 1
+	for _, c := range hist {
+		if c > maxCount {
+			maxCount = c
+		}
+	}
+	logMax := math.Log10(float64(maxCount) + 1)
+	if logMax < 0.1 {
+		logMax = 0.1
+	}
+	barW := (r.w - 4) / occurrenceHistogramBuckets
+	if barW < 4 {
+		barW = 4
+	}
+	gap := 2
+	ebitenutil.DebugPrintAt(screen, "Tokens x repeats (log)", r.x, r.y)
+	for i := 0; i < occurrenceHistogramBuckets; i++ {
+		c := hist[i]
+		logC := math.Log10(float64(c) + 1)
+		h := int(logC / logMax * float64(barH))
+		if h < 0 {
+			h = 0
+		}
+		if h > barH {
+			h = barH
+		}
+		x := r.x + 2 + i*(barW+gap)
+		y := barY + barH - h
+		vector.FillRect(screen, float32(x), float32(y), float32(barW), float32(h), clrAcc, true)
+		vector.StrokeRect(screen, float32(x), float32(y), float32(barW), float32(h), 1, clrGrid, true)
+		ebitenutil.DebugPrintAt(screen, labels[i], x, barY+barH+1)
+		if c > 0 {
+			ebitenutil.DebugPrintAt(screen, fmt.Sprintf("%d", c), x+barW/2-4, y+1)
+		}
+	}
+}
+
+func (g *gpuGame) drawTokenTrend(screen *ebiten.Image, r uiRect) {
+	ebitenutil.DebugPrintAt(screen, "Tokens over time", r.x, r.y)
+	if len(g.tokenHistory) == 0 {
+		ebitenutil.DebugPrintAt(screen, "No samples yet", r.x+4, r.y+16)
+		return
+	}
+	plotX := r.x + 2
+	plotY := r.y + 12
+	plotW := r.w - 4
+	plotH := r.h - 16
+	if plotW < 4 || plotH < 4 {
+		return
+	}
+	vector.StrokeRect(screen, float32(plotX), float32(plotY), float32(plotW), float32(plotH), 1, clrGrid, true)
+
+	minV := g.tokenHistory[0]
+	maxV := g.tokenHistory[0]
+	for i := 1; i < len(g.tokenHistory); i++ {
+		v := g.tokenHistory[i]
+		if v < minV {
+			minV = v
+		}
+		if v > maxV {
+			maxV = v
+		}
+	}
+	span := maxV - minV
+	if span < 1 {
+		span = 1
+	}
+
+	n := len(g.tokenHistory)
+	if n == 1 {
+		y := plotY + plotH - 1
+		vector.FillRect(screen, float32(plotX), float32(y), float32(plotW), 1, clrAcc, true)
+	} else {
+		stepIdx := 1
+		if n-1 > plotW {
+			stepIdx = int(math.Ceil(float64(n-1) / float64(plotW)))
+		}
+		prevI := 0
+		prevX := plotX
+		prevY := plotY + plotH - 1 - int(float64(g.tokenHistory[0]-minV)/float64(span)*float64(plotH-1))
+		for i := stepIdx; i < n; i += stepIdx {
+			x := plotX + int(float64(i)/float64(n-1)*float64(plotW-1))
+			y := plotY + plotH - 1 - int(float64(g.tokenHistory[i]-minV)/float64(span)*float64(plotH-1))
+			if x <= prevX && i != n-1 {
+				continue
+			}
+			vector.StrokeLine(screen, float32(prevX), float32(prevY), float32(x), float32(y), 1.5, clrAcc, true)
+			prevX = x
+			prevY = y
+			prevI = i
+		}
+		if prevI != n-1 {
+			x := plotX + plotW - 1
+			y := plotY + plotH - 1 - int(float64(g.tokenHistory[n-1]-minV)/float64(span)*float64(plotH-1))
+			vector.StrokeLine(screen, float32(prevX), float32(prevY), float32(x), float32(y), 1.5, clrAcc, true)
+		}
+	}
+
+	totalSec := 0
+	if g.tokenHistoryStrideSec > 0 {
+		totalSec = (len(g.tokenHistory) - 1) * g.tokenHistoryStrideSec
+	}
+	ebitenutil.DebugPrintAt(screen, fmt.Sprintf("%ds -> now", totalSec), plotX+2, plotY+1)
+	ebitenutil.DebugPrintAt(screen, fmt.Sprintf("N %d..%d", minV, maxV), plotX+plotW-72, plotY+1)
+}
 
 func (g *gpuGame) Draw(screen *ebiten.Image) {
 	drawStart := time.Now()
@@ -112,6 +257,161 @@ func (g *gpuGame) Draw(screen *ebiten.Image) {
 	capHist(&g.dynHistJitter)
 	capHist(&g.dynHistSNR)
 
+	// AVN (Acoustic Vector Navigation) Logic
+	if s := g.buf.Sensors[sid]; s != nil && s.LastDsp != nil {
+		dsp := s.LastDsp
+		liveV := [3]float64{s.LockinDeltaXY, s.LockinDeltaYZ, -s.LockinDeltaXZ}
+		liveVel := g.cachedSyncMetrics.PhaseVelocityDegSec
+
+		// 1. Record data if recording
+		if g.avn.Recording != "" {
+			g.avn.RecBuffer = append(g.avn.RecBuffer, liveV)
+			g.avn.RecVel = append(g.avn.RecVel, liveVel)
+		}
+
+		// 2. Real-time Mapping
+		if g.avn.Enabled && g.avn.Calibration.MaxDelta > 0 {
+			cal := g.avn.Calibration
+
+			// Quality Gate: If SNR is too low, we can't trust phases. Fade to center.
+			snr := dsp.Resonance.CarrierSNR
+			trust := 1.0
+			if snr < 4.0 {
+				trust = 0.0
+			} else if snr < 10.0 {
+				trust = float64(snr-4.0) / 6.0
+			}
+
+			dv := [3]float64{
+				(liveV[0] - cal.Rest[0]) * trust,
+				(liveV[1] - cal.Rest[1]) * trust,
+				(liveV[2] - cal.Rest[2]) * trust,
+			}
+
+			dot := func(a, b [3]float64) float64 {
+				return a[0]*b[0] + a[1]*b[1] + a[2]*b[2]
+			}
+
+			vU := [3]float64{cal.Up[0] - cal.Rest[0], cal.Up[1] - cal.Rest[1], cal.Up[2] - cal.Rest[2]}
+			vD := [3]float64{cal.Down[0] - cal.Rest[0], cal.Down[1] - cal.Rest[1], cal.Down[2] - cal.Rest[2]}
+			vL := [3]float64{cal.Left[0] - cal.Rest[0], cal.Left[1] - cal.Rest[1], cal.Left[2] - cal.Rest[2]}
+			vR := [3]float64{cal.Right[0] - cal.Rest[0], cal.Right[1] - cal.Rest[1], cal.Right[2] - cal.Rest[2]}
+
+			rawX := dot(dv, vR) - dot(dv, vL)
+			rawY := dot(dv, vU) - dot(dv, vD)
+
+			norm := cal.MaxDelta
+			if norm < 0.1 {
+				norm = 1.0
+			}
+
+			nx := (rawX / norm)
+			ny := (rawY / norm)
+
+			tf := func(v float64) float64 {
+				sign := 1.0
+				if v < 0 {
+					sign = -1.0
+					v = -v
+				}
+				if v > 1.0 {
+					v = 1.0
+				}
+				return sign * (v * v) // Exponential transfer
+			}
+
+			targetX := tf(nx)
+			targetY := tf(ny)
+
+			// EMA Smoothing (alpha=0.15 for smooth drift)
+			const alpha = 0.15
+			g.avn.Live.SmoothX = g.avn.Live.SmoothX*(1-alpha) + targetX*alpha
+			g.avn.Live.SmoothY = g.avn.Live.SmoothY*(1-alpha) + targetY*alpha
+
+			g.avn.Live.X = g.avn.Live.SmoothX
+			g.avn.Live.Y = g.avn.Live.SmoothY
+			g.avn.Live.RawX = nx
+			g.avn.Live.RawY = ny
+			g.avn.Live.Vel = liveVel
+			g.avn.Live.IsClick = math.Abs(liveVel) > cal.ClickVel && trust > 0.5
+
+			// Update Trail
+			g.avn.LiveTrail = append(g.avn.LiveTrail, [2]float64{g.avn.Live.X, g.avn.Live.Y})
+			if len(g.avn.LiveTrail) > 30 {
+				g.avn.LiveTrail = g.avn.LiveTrail[1:]
+			}
+
+			// ... Periodic Logging ...
+			if time.Since(g.avn.Live.LastLog) > time.Second {
+				log.Printf("[AVN-LIVE] X:%+.2f Y:%+.2f (raw: %+.2f, %+.2f) SNR:%.1f Trust:%.1f",
+					g.avn.Live.X, g.avn.Live.Y, nx, ny, snr, trust)
+				g.avn.Live.LastLog = time.Now()
+			}
+		} else {
+			g.avn.LiveTrail = nil
+			g.avn.Live.X = 0
+			g.avn.Live.Y = 0
+			g.avn.Live.SmoothX = 0
+			g.avn.Live.SmoothY = 0
+		}
+	}
+
+	// Update TOMO RPG Mechanics
+	if g.mainScreen == "TOMO" {
+		if g.tomoActiveBuffs == nil {
+			g.tomoActiveBuffs = make(map[string]float64)
+		}
+
+		// 1. Calculate Charge and Balance (RPG Physics)
+		magSum := 0.0
+		magDiff := 0.0
+		bestSNR := -20.0
+
+		mL := g.buf.Sensors[uint8(g.tomoSensorMap["LeftLeg"])]
+		mR := g.buf.Sensors[uint8(g.tomoSensorMap["RightLeg"])]
+
+		if mL != nil && mR != nil {
+			magSum = mL.LockinMag + mR.LockinMag
+			magDiff = (mL.LockinMag - mR.LockinMag) / (magSum + 1e-9)
+			g.tomoLiveTwist = (mL.LockinPhase - mR.LockinPhase) * 180 / math.Pi
+		}
+
+		for _, s := range g.buf.Sensors {
+			if s.LastDsp != nil && float64(s.LastDsp.Resonance.CarrierSNR) > bestSNR {
+				bestSNR = float64(s.LastDsp.Resonance.CarrierSNR)
+			}
+		}
+
+		// Map to 2D field
+		targetX := magDiff * 1.5 // Sensitivity boost
+		targetY := (magSum / 0.04) - 0.5
+
+		const alpha = 0.1
+		g.tomoLiveSmoothX = g.tomoLiveSmoothX*(1-alpha) + targetX*alpha
+		g.tomoLiveSmoothY = g.tomoLiveSmoothY*(1-alpha) + targetY*alpha
+
+		// Fireball casting speed (dependent on power)
+		targetCharge := math.Max(0, math.Min(1, magSum/0.05))
+		if targetCharge > 0.1 {
+			g.tomoCastLevel = g.tomoCastLevel*0.97 + targetCharge*0.03
+		} else {
+			g.tomoCastLevel *= 0.95 // Decay
+		}
+
+		// 2. Assign Buffs
+		updateBuff := func(name string, active bool) {
+			if active {
+				g.tomoActiveBuffs[name] = g.tomoActiveBuffs[name]*0.9 + 0.1
+			} else {
+				g.tomoActiveBuffs[name] *= 0.95
+			}
+		}
+		updateBuff("POWER", bestSNR > 12.0)
+		updateBuff("STABILITY", math.Abs(g.cachedSyncMetrics.PhaseVelocityDegSec) < 30.0)
+		updateBuff("SYNC", math.Abs(g.tomoLiveBalanceX) < 15.0 && magSum > 0.01)
+		updateBuff("RESONANCE", g.tomoCastLevel > 0.8)
+	}
+
 	g.buf.Mu.Unlock()
 	x, _, _, ads := g.getSelectedSensorData()
 	nX := len(x)
@@ -173,13 +473,18 @@ func (g *gpuGame) Draw(screen *ebiten.Image) {
 	addTab("DYN", 36)
 	addTab("BANDS", bandsTabW)
 	addTab("XCORR", xcorrTabW)
+	addTab("DISCOVERY", mainTabW+10)
+	addTab("ALPHABET", mainTabW+8)
+	addTab("TRAINER", 56)
+	addTab("MEANING", 52)
+	addTab("TOMO", 48)
 	addTab("LOCKIN", 56)
-	for _, name := range []string{"RAW", "DYN", "BANDS", "XCORR", "LOCKIN"} {
+	for _, name := range []string{"RAW", "DYN", "BANDS", "XCORR", "DISCOVERY", "ALPHABET", "TRAINER", "MEANING", "TOMO", "LOCKIN"} {
 		r, ok := g.mainTabRects[name]
 		if !ok {
 			continue
 		}
-		on := g.mainScreen == name || (g.mainScreen == "" && name == "LOCKIN")
+		on := g.mainScreen == name || (g.mainScreen == "" && name == "RAW")
 		fill := clrBtn
 		if on {
 			fill = clrBtnOn
@@ -192,6 +497,9 @@ func (g *gpuGame) Draw(screen *ebiten.Image) {
 		}
 		if name == "BANDS" {
 			label = "RAW"
+		}
+		if name == "TRAINER" {
+			label = "TRAIN"
 		}
 		if name == "LOCKIN" {
 			label = "LOCK-IN"
@@ -207,7 +515,7 @@ func (g *gpuGame) Draw(screen *ebiten.Image) {
 	}
 
 	if g.mainScreen == "" {
-		g.mainScreen = "LOCKIN"
+		g.mainScreen = "RAW"
 	}
 	contentScreen := g.mainScreen
 	contentStart := time.Now()
@@ -220,11 +528,21 @@ func (g *gpuGame) Draw(screen *ebiten.Image) {
 		DrawBandsScreen(g, screen, contentW, h)
 	case "XCORR":
 		DrawXcorrScreen(g, screen, contentW, h)
+	case "DISCOVERY":
+		DrawDiscoveryScreen(g, screen, contentW, h)
+	case "ALPHABET":
+		DrawAlphabetScreen(g, screen, contentW, h)
+	case "TRAINER":
+		DrawTrainerScreen(g, screen, contentW, h)
+	case "MEANING":
+		DrawMeaningScreen(g, screen, contentW, h)
+	case "TOMO":
+		DrawTomographyScreen(g, screen, contentW, h)
 	case "LOCKIN":
 		DrawLockinScreen(g, screen, contentW, h)
 	default:
-		DrawLockinScreen(g, screen, contentW, h)
-		contentScreen = "LOCKIN"
+		DrawScanScreen(g, screen, contentW, h)
+		contentScreen = "RAW"
 	}
 	contentDur := time.Since(contentStart)
 	panelStart := time.Now()
@@ -256,6 +574,77 @@ func (g *gpuGame) Draw(screen *ebiten.Image) {
 		for name, r := range layout.tabs {
 			on := g.panelTab == name || (g.panelTab == "" && name == "EMITTER")
 			drawButton(r, name, on)
+		}
+
+		drawEntropySection := func() {
+			if b, ok := layout.buttons["entropy_sep"]; ok {
+				ebitenutil.DebugPrintAt(screen, "--- Entropy / Alphabet ---", b.x, b.y+2)
+			}
+			if sl, ok := layout.sliders["h_thr"]; ok {
+				drawSlider(sl.rect, fmt.Sprintf("H_thr %.2f", g.shapeParams.HThr), g.shapeParams.HThr, sl.min, sl.max)
+			}
+			if sl, ok := layout.sliders["min_delta_h"]; ok {
+				drawSlider(sl.rect, fmt.Sprintf("minΔH %.4f", g.shapeParams.MinDeltaH), g.shapeParams.MinDeltaH, sl.min, sl.max)
+			}
+			if sl, ok := layout.sliders["dist_thr"]; ok {
+				drawSlider(sl.rect, fmt.Sprintf("dist %.2f", g.distThr), g.distThr, sl.min, sl.max)
+			}
+			if sl, ok := layout.sliders["min_cos"]; ok {
+				drawSlider(sl.rect, fmt.Sprintf("minCos %.2f", g.shapeParams.MinCos), g.shapeParams.MinCos, sl.min, sl.max)
+			}
+			if sl, ok := layout.sliders["max_freq_ratio"]; ok {
+				drawSlider(sl.rect, fmt.Sprintf("fRatio %.2f", g.shapeParams.MaxFreqRatio), g.shapeParams.MaxFreqRatio, sl.min, sl.max)
+			}
+			if sl, ok := layout.sliders["zoom_x"]; ok {
+				drawSlider(sl.rect, fmt.Sprintf("Zoom X %.1f", g.zoomX), g.zoomX, sl.min, sl.max)
+			}
+			if sl, ok := layout.sliders["zoom_y"]; ok {
+				drawSlider(sl.rect, fmt.Sprintf("Zoom Y %.1f", g.zoomY), g.zoomY, sl.min, sl.max)
+			}
+			if sl, ok := layout.sliders["adjacent_dist_thr"]; ok {
+				drawSlider(sl.rect, fmt.Sprintf("adjDist %.2f", g.shapeParams.AdjacentDistThr), g.shapeParams.AdjacentDistThr, sl.min, sl.max)
+			}
+			if sl, ok := layout.sliders["hysteresis_margin"]; ok {
+				drawSlider(sl.rect, fmt.Sprintf("hyst %.2f", g.shapeParams.HysteresisMargin), g.shapeParams.HysteresisMargin, sl.min, sl.max)
+			}
+			if sl, ok := layout.sliders["ultra_strong_dist"]; ok {
+				drawSlider(sl.rect, fmt.Sprintf("ultra %.3f", g.shapeParams.UltraStrongDist), g.shapeParams.UltraStrongDist, sl.min, sl.max)
+			}
+			if b, ok := layout.buttons["x_ge"]; ok {
+				lbl := fmt.Sprintf("x≥%d", g.reactionMinOccurrences)
+				drawButton(b, lbl, false)
+			}
+			if sl, ok := layout.sliders["glyph_ttl_sec"]; ok {
+				lbl := "TTL inf"
+				val := float64(g.glyphTTLSec)
+				if g.glyphTTLSec > 0 {
+					lbl = fmt.Sprintf("TTL %dm%02ds", g.glyphTTLSec/60, g.glyphTTLSec%60)
+				}
+				drawSlider(sl.rect, lbl, val, sl.min, sl.max)
+			}
+			if b, ok := layout.buttons["entropy_metrics"]; ok {
+				_, _, hFinal, _ := g.residualDecomposer.LastResult()
+				peaksT, peaksC, peaksR := 0, 0, 0
+				if g.runStats != nil {
+					peaksT, peaksC, peaksR = g.runStats.PeaksTotal, g.runStats.PeaksClassified, g.runStats.PeaksRejectedStationarity
+				}
+				tokensTotal := g.totalTokensAcrossSensors()
+				ebitenutil.DebugPrintAt(screen, fmt.Sprintf("H=%.2f N=%d P=%d/%d/%d", hFinal, tokensTotal, peaksC, peaksT, peaksR), b.x, b.y+2)
+			}
+			if b, ok := layout.buttons["token_history_toggle"]; ok {
+				label := "Token trend [ ]"
+				if g.tokenTrendEnabled {
+					label = "Token trend [x]"
+				}
+				drawButton(b, label, g.tokenTrendEnabled)
+			}
+			if b, ok := layout.buttons["token_histogram"]; ok {
+				if g.tokenTrendEnabled {
+					g.drawTokenTrend(screen, b)
+				} else {
+					g.drawTokenHistogram(screen, b)
+				}
+			}
 		}
 
 		switch g.panelTab {
@@ -383,6 +772,9 @@ func (g *gpuGame) Draw(screen *ebiten.Image) {
 			if b, ok := layout.buttons["panic"]; ok {
 				drawButton(b, "PANIC", g.protocol.PanicStop)
 			}
+
+		case "GLYPHS":
+			drawEntropySection()
 		}
 	}
 	panelDur := time.Since(panelStart)
@@ -405,6 +797,14 @@ func (g *gpuGame) Draw(screen *ebiten.Image) {
 		g.perfDrawBANDS += contentDur
 	case "XCORR":
 		g.perfDrawXCORR += contentDur
+	case "DISCOVERY":
+		g.perfDrawDISC += contentDur
+	case "ALPHABET":
+		g.perfDrawALPHA += contentDur
+	case "TRAINER":
+		g.perfDrawTRAIN += contentDur
+	case "MEANING":
+		g.perfDrawMEAN += contentDur
 	}
 }
 

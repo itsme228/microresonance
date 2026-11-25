@@ -8,6 +8,7 @@ require (
 	github.com/hajimehoshi/ebiten/v2 v2.9.7
 	github.com/mjibson/go-dsp v0.0.0-20180508042940-11479a337f12
 	github.com/rivo/tview v0.42.0
+	github.com/yalue/onnxruntime_go v1.25.0
 )
 
 require (

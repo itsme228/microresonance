@@ -1,36 +1,73 @@
-# Microresonance Telemetry Server (`receiverd`)
+# MR Scope — консольный осциллограф и система токенизации намерений
 
-Go-based real-time acquisition, **802.11 TSF-coherent I/Q lock-in demodulation**, emitter control, and **raw telemetry dump recorder** for the Microresonance wireless neuromuscular interface.
+Принимает поток данных от ESP32 (ADXL355 + ADS8681) и обеспечивает визуализацию, декодирование и обработку сигналов в реальном времени.
 
-## Core Capabilities
+> **Важно:** Прошивки трансивера (Transmitter) и ресивера (Receiver) для ESP32 находятся в директории уровнем выше от данного проекта.
 
-- **Primary Function — Telemetry & Dump Recording:**
-  - Receives packed 1460-byte `RawSyncPacket` (`0x4D58`) UDP/TCP frames from `microresonance_receiver` (`ADXL355` 4 kHz + `LSM6DSOX` IMU + `sEMG` + hardware TSF timestamps).
-  - Automatically streams per-frame multi-modal lock-in + IMU + sEMG telemetry to `data/physio/physio_raw_YYYYMMDD_HHMMSS.jsonl` (the exact format analyzed by [`../scripts/analyze_session.py`](../scripts/analyze_session.py) and [`../scripts/verify_paper_claims.py`](../scripts/verify_paper_claims.py)).
-  - Supports on-demand raw session dump toggling (`REC DUMP` button + custom session name on the `FFT` screen).
-- **Coherent 3-Axis Lock-In Demodulation:** Real-time quadrature (`I/Q`) demodulation against the 802.11 Wi-Fi TSF clock (`internal/domain/signal/demod.go`).
-- **HTTP Config & TSF Sync API (`:8080`):** Serves emitter/receiver protocol configuration and measures `X-Device-TSF` clock offsets.
-- **5 Signal-Processing GUI Screens (Ebiten):**
-  - **`LOCK-IN`** — 3-axis lock-in magnitudes, unwrapped phases, differential phases (`Δφ_XY`, `Δφ_YZ`, `Δφ_XZ`), and per-axis FFT waterfalls.
-  - **`FFT`** — Raw X/Y/Z oscillograms, FFT spectra, waterfalls, and raw session dump recorder.
-  - **`DYN`** — Real-time phase/magnitude/gyro/sEMG history and polar/Lissajous orbits (`Z` key tares phase).
-  - **`RAW`** — Causal time-domain IIR bandpass filterbank waveforms.
-  - **`XCORR`** — Cross-correlation across sensors/axes.
-  - Right panel: **`EMITTER`** (carrier tones, levels, waveform) and **`RECEIVER`** (demodulation link, probing presets, TSF sync diagnostics).
+## Основные возможности
+- **GPU Визуализация:** Реалтайм графики и спектры (ebiten).
+- **Модульный пайплайн:** Четкое разделение на этапы: Прием -> Декодирование -> Обработка -> Интерпретация.
+- **Токенизация намерений:** Кластеризация форм волн в устойчивый алфавит жестов.
+- **VR/Web Интеграция:** Трансляция состояния и событий через WebSocket.
 
-> **Note:** Earlier unfinished/experimental prototypes (glyph discovery, alphabet clustering, ML trainer, semantic meaning/bindings, VR WebSocket, multi-sensor tomography) are intentionally excluded from `main` and archived on the `wip/experimental-server-archive` branch.
-
-## Build & Run
-
-Requires Go 1.22+ (and standard X11/OpenGL dev headers on Linux for Ebiten GPU mode, or `-gpu=false` for terminal TUI mode).
+## Быстрый старт
 
 ```bash
-cd microresonance_server
-go build -o receiverd ./cmd/receiverd
-
-# GPU dashboard + UDP ingest (:5555) + HTTP emitter/TSF API (:8080)
-./receiverd -gpu -addr=:5555 -http=:8080 -https=""
-
-# Headless / terminal TUI fallback
-./receiverd -gpu=false -addr=:5555 -http=:8080 -https=""
+go mod tidy
+go build -o server ./cmd/receiverd/main.go
+./server -addr=:5555
 ```
+*По умолчанию запускается графический режим (GPU). Для запуска в консольном режиме (TUI) используйте флаг `-gpu=false`.*
+
+### HTTP API и Конфигурация
+Запуск с HTTP API (по умолчанию порт 8080):
+```bash
+./server -http=:8080
+```
+Сервер является "источником правды" для ESP32. Устройства опрашивают `/api/transmitter` и `/api/receiver` для получения настроек частоты, фазы и режима работы.
+
+## Архитектура проекта
+
+Проект переработан для обеспечения высокой модульности и удобства поддержки нейросетями:
+
+- `cmd/receiverd/`: Точка входа в приложение.
+- `internal/app/`: Логика интерфейсов.
+    - `gui/`: Графический движок (Ebiten), рендеринг экранов (SCAN, BANDS, ALPHABET и др.).
+    - `tui/`: Текстовый интерфейс (tview).
+- `internal/domain/`: Ядро системы.
+    - `ingest/`: Декодирование протокола передачи данных.
+    - `signal/`: Буферы данных, фильтры (IIR), расчет RMS и FFT.
+    - `alphabet/`: Логика формирования алфавита и хранения паттернов.
+    - `pipeline/`: Конвейер обработки форм волн и выделения токенов.
+- `internal/ports/`: Внешние интерфейсы.
+    - `udp/`, `tcp/`: Сетевые слушатели.
+    - `httpapi/`: REST API для конфигурации.
+    - `vrws/`: WebSocket хаб для VR и Web-клиентов.
+
+## Управление (GPU режим)
+- **Мышь:** Перетаскивание слайдеров (**t** — окно времени, **FFT** — размер окна БПФ).
+- **Кнопка [Auto]:** Переключение режима масштабирования по вертикали (Y).
+- **Клавиатура:**
+    - `F`: Переключение логарифмической/линейной шкалы частот.
+    - `[ ]`, `- +`: Изменение временного окна.
+    - `Esc`, `Q`: Выход.
+
+## Флаги запуска
+
+| Флаг | По умолчанию | Описание |
+|------|--------------|----------|
+| `-gpu` | `true` | Запуск графического интерфейса (Ebiten). |
+| `-addr` | `:5555` | Адрес для приема данных от ESP32. |
+| `-http` | `:8080` | Порт для HTTP API. |
+| `-proto` | `udp` | Протокол передачи (`udp` или `tcp`). |
+| `-time` | `500ms` | Временное окно анализа. |
+| `-adxlRate` | `4000` | Частота ADXL (Гц). |
+| `-adsRate` | `40000` | Частота ADS8681 (Гц). |
+
+## Разработка и поддержка
+Для добавления новых функций:
+- **Новые экраны:** Добавляйте `screen_*.go` в `internal/app/gui`.
+- **Изменение протокола:** Правьте `decoder.go` в `internal/domain/ingest`.
+- **Логика сигналов:** Все фильтры и препроцессинг живут в `internal/domain/signal`.
+
+Документация по критериям алфавита и алгоритмам доступна в папке `docs/`.

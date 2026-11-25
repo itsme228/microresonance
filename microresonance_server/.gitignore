@@ -1,0 +1,43 @@
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Local agent/tooling state
+.claude
+.claude/
+.codex
+.codex/
+
+# Go build / test artifacts
+.gocache/
+*.test
+coverage.out
+*.pyc
+__pycache__/
+
+# Local binaries
+/server
+/main
+
+# Logs and runtime dumps
+*.log
+
+# TLS / secrets
+certs/*.crt
+certs/*.key
+
+# Generated or local-only data
+/data/
+/trainer_dataset/
+/recorded.jsonl
+
+# Historical backup copy
+/server_oldcopy/
+
+# Heavy generated docs assets
+/docs/patent_diagrams/node_modules/
+/docs/patent_diagrams/.venv/
+/docs/patent_diagrams/venv/
+/docs/patent_diagrams/__pycache__/
+*.jsonl

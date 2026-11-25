@@ -18,6 +18,7 @@ import (
 	"server/internal/ports/httpapi"
 	"server/internal/ports/tcp"
 	"server/internal/ports/udp"
+	"server/internal/ports/vrws"
 )
 
 var (
@@ -37,6 +38,8 @@ var (
 	plotW        = flag.Int("width", 100, "Plot width in chars")
 	plotH        = flag.Int("height", 6, "Plot height in chars")
 	logLines     = flag.Int("loglines", 12, "Number of ESP32 log lines")
+	glyphLog     = flag.Bool("glyph", false, "Write detailed glyph merge log")
+	glyphFile    = flag.String("glyphFile", "", "Path to glyph merge log file")
 	diagInterval = flag.Duration("diagInterval", 10*time.Second, "Diagnostic log interval (0 = disabled)")
 	diagFile     = flag.String("diagFile", "", "Diagnostic log file path (empty = stderr)")
 )
@@ -44,13 +47,29 @@ var (
 func Main() {
 	flag.Parse()
 
+	var glyphLogger *log.Logger
+	if *glyphLog {
+		path := *glyphFile
+		if path == "" {
+			path = fmt.Sprintf("glyph_merge_%s.log", time.Now().Format("20060102_150405"))
+		}
+		fh, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "glyph log file %s: %v\n", path, err)
+			os.Exit(1)
+		}
+		glyphLogger = log.New(fh, "", log.LstdFlags|log.Lmicroseconds)
+	}
+
 	configStore := httpapi.NewConfigStore()
 	bufs := signal.NewBuffers()
 
-	// HTTP/HTTPS API
+	// HTTP/HTTPS API & VR WS
 	if *httpAddr != "" || *httpsAddr != "" {
 		mux := http.NewServeMux()
 		httpapi.RegisterHTTPAPI(mux, configStore, bufs)
+		hub := vrws.NewHub()
+		mux.HandleFunc("/ws", hub.ServeWS)
 
 		if *acmeWebroot != "" {
 			acmeChallengeDir := filepath.Join(*acmeWebroot, ".well-known", "acme-challenge")
@@ -110,7 +129,7 @@ func Main() {
 	}
 
 	if *gpu {
-		gui.Run(bufs, configStore)
+		gui.Run(bufs, configStore, glyphLogger)
 	} else {
 		app := tui.NewApp(bufs, ingestCfgFn, *refresh, plotW, plotH, timeWindow, logLines)
 		if err := app.Run(); err != nil {
