@@ -97,6 +97,21 @@ The hardware consists of two wireless **ESP32-S3** nodes synchronized over stand
 | :---: | :---: |
 | ![Emitter belt assembly](IMG20260514213337.jpg) | ![Receiver and detector strap](IMG20260514213901.jpg) |
 
+### Hardware Bill of Materials (BOM)
+
+| Node | Component | Model / Notes |
+| :--- | :--- | :--- |
+| **Emitter Belt** (`microresonance_transceiver`) | **MCU** | **ESP32-S3** (N16R8, APLL enabled) |
+| | **DAC** | **PCM5102A** 32-bit I2S audio DAC (`BCK`/`LRCK`/`DIN` + external `MCLK` on `GPIO 15`; legacy `AD9833` DDS driver also remains in code) |
+| | **Audio Amplifier** | **ZK-502C** Class-D stereo amplifier |
+| | **Vibration Exciter** | **Dayton Audio DAEX32EP-4** (4 Ω, 40 W) — *much smaller exciters can also be used; the DAEX32EP-4 is oversized for low-amplitude 500 Hz probing* |
+| | **UI (optional)** | **SSD1315** OLED display + 4 tactile buttons (`K1`–`K4`) |
+| **Receiver Strap** (`microresonance_receiver`) | **MCU** | **ESP32-S3** (FH4R2) |
+| | **Primary Acoustic Sensor** | **ADXL355** 3-axis 20-bit low-noise MEMS accelerometer (`4000 Hz` ODR via SPI + `DRDY` ISR) |
+| | **Reference IMU** | **LSM6DSOX** 6-axis IMU (`400 kHz` I2C + hardware 24-bit timestamp) |
+| | **Reference sEMG** | Commodity 3-contact inline gold-plated dry analog sEMG module (AliExpress, read via ESP32-S3 ADC on `GPIO 1`) |
+| **Experimental / Inactive** | **Piezo Film + ADS8681** | Driver ([`ads8681.h`](microresonance_receiver/include/ads8681.h)) is present in firmware from earlier tests; piezo-film experiments have not yielded useful results compared to the ADXL355. |
+
 ### Key Firmware Engineering Solutions
 
 Achieving sub-degree acoustic phase lock across independent wireless microcontrollers required solving three hardware-level bottlenecks in the firmware:
