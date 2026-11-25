@@ -43,6 +43,28 @@ All raw multi-modal telemetry from the reference session is committed directly i
 - **Raw dataset:** [`physio_raw_20260514_175320.jsonl`](physio_raw_20260514_175320.jsonl) (`5,136` frames, `153.74 s` duration, `33.4 Hz` frame rate, `500.0 Hz` carrier).
 - **Reproducible analysis script:** [`scripts/analyze_session.py`](scripts/analyze_session.py)
 
+### Preprint Figures (`paper/figures/`, 300 DPI)
+
+All four publication figures are reproducible directly from `physio_raw_20260514_175320.jsonl` via [`scripts/generate_paper_figures.py`](scripts/generate_paper_figures.py):
+
+#### 1. Six-State Phase–Magnitude Attractors & Acoustic Phase vs. sEMG
+![State-space islands and phase vs sEMG](paper/figures/fig1_islands_state_space.png)
+*Six discrete biomechanical states (3 postures × relaxed/contracted) separate cleanly in 4D acoustic space (`92.8%` holdout accuracy, Silhouette `+0.46` vs. `-0.24` for sEMG); under standing orthostatic load, sEMG baseline rises `20.7×` while acoustic phase preserves a `66.1°` step (`d = 3.57`).*
+
+#### 2. Non-Circular Protocol-Frequency (`0.10 Hz`) SNR Spectra
+![Non-circular 0.10 Hz SNR spectra](paper/figures/fig2_noncircular_snr_spectra.png)
+*Independent frequency-domain SNR at the known `0.10 Hz` contraction cadence (`~5 s` hold / `~5 s` rest): Acoustic Phase achieves `33.0 / 31.3 / 28.2 dB` across seated, extended, and standing regimes — outperforming co-located sEMG by `+18.1 to +26.7 dB` and IMU tilt by `+9.8 to +12.4 dB`.*
+
+#### 3. 3D Wave Polarization Orthogonality (IMU-Free Posture Classification)
+![3D polarization orthogonality](paper/figures/fig3_polarization_orthogonality.png)
+*Inter-axis phase differences `Δφ_XY` and `Δφ_YZ` depend on joint/waveguide geometry rather than isometric effort, achieving `100.0%` IMU-free 3-posture classification (`N = 1`) orthogonally to voluntary contraction.*
+
+#### 4. Motion Dynamics vs. Acoustic Phase Velocity (Self-Gating)
+![Gyroscope vs phase velocity](paper/figures/fig4_gyro_vs_phase_velocity.png)
+*Co-located gyroscope magnitude correlates with acoustic phase velocity `|dφ/dt|` (`r = 0.59`), with `17.9×` peak separation between macroscopic posture transitions (`41.8 rad/s`) and isometric holds (`2.34 rad/s`), enabling self-gating at `4 rad/s` without an IMU.*
+
+### Full 7-Panel Session Overview (`scripts/analyze_session.py`)
+
 ![Full Session Acoustic Phase vs sEMG Visualization](1778779569118.png)
 
 ### Chronological Regime Breakdown
@@ -50,7 +72,7 @@ All raw multi-modal telemetry from the reference session is committed directly i
 | Time Window | Experimental Protocol | Acoustic Phase Behavior (500 Hz Lock-In) | Reference sEMG Behavior (Neural ADC) |
 | :--- | :--- | :--- | :--- |
 | **`0 – 30 s`** | **Static Rest (Seated)** | **Acoustic Hard-Lock.** Unwrapped phase holds flat at $\sim 5.3\text{ rad}$; inter-axis differential phase $\Delta\phi_{XY}$ is locked within $\pm 1.5^\circ$. | Low resting baseline floor ($25\text{th pct} \approx 9.8$), sporadic micro-spikes. |
-| **`30 – 68 s`** | **Seated Isometric Intent Cycles** (~5 s tension / relaxation) | **Clean Step Response.** Voluntary isometric contractions produce repeatable, square-like phase steps of **$\sim 50^\circ\text{–}58^\circ$** ($\sim 0.9\text{–}1.0\text{ rad}$) and concurrent magnitude damping dips. | Bursts correlate with contractions, though noisy within each hold. |
+| **`30 – 68 s`** | **Seated Isometric Intent Cycles** (~5 s tension / relaxation) | **Clean Step Response.** Voluntary isometric contractions produce repeatable, square-like phase steps (**$\sim 36^\circ\text{–}67^\circ$**) and concurrent `+11–16%` carrier magnitude rises above $\omega_0$. | Bursts correlate with contractions, though noisy within each hold. |
 | **`68 – 105 s`** | **Posture Change (Seated Leg Extension)** | **Waveguide Re-Lock.** At `68 s`, extending the leg alters waveguide geometry; $\Delta\phi_{XY}$ flips by $+180^\circ$ to a new stable plateau and immediately resumes tracking isometric intent steps. | Baseline shifts; spike amplitude becomes less uniform. |
 | **`107 – 136 s`** | **Standing Up (Orthostatic Postural Load)** | **Preserved Intent Contrast.** Despite full body-weight load on the leg, conscious isometric contractions continue to produce distinct, flat-topped phase steps (**Zoom Panel 6**). | **Signal Collapse.** Static postural recruitment raises the sEMG baseline floor **20.7×** (`9.8` $\to$ `203.1`), masking voluntary clicks in continuous background tetanus. |
 | **`138 – 153.7 s`** | **Seated Recalibration** | Returning to the seated posture restores $\Delta\phi_{XY}$ and unwrapped phase to the initial baseline cluster. | Postural tetanus subsides back to resting floor. |
@@ -58,7 +80,7 @@ All raw multi-modal telemetry from the reference session is committed directly i
 ### Panel-by-Panel Guide to the Figure
 
 1. **Full Session: Neural Intent vs. Acoustic Phase:** Overlays unwrapped 500 Hz acoustic phase (black, radians) against raw sEMG envelope standard deviation (red). Note the clean rectangular steps in acoustic phase throughout both seated (`30–105 s`) and standing (`110–136 s`) regimes.
-2. **Acoustic Transparency (Magnitude):** Lock-in carrier amplitude at 500 Hz in gravitational units ($g$). Each isometric contraction increases tissue density, measurably damping carrier transmission ($\sim 3.3\text{ mg} \to 2.1\text{ mg}$).
+2. **Acoustic Transmission (Magnitude):** Lock-in carrier amplitude at 500 Hz in gravitational units ($g$). Above soft-tissue resonance ($\omega > \omega_0$), isometric stiffening increases transmission gain by `+11–16%`, while passive strap/respiration drift (`CV = 15.6%`) remains largely decoupled from resting phase (`Corr(Mag, Phase) = +0.075`).
 3. **Motion Dynamics (Gyroscope):** 3-axis angular velocity magnitude ($\text{deg/s}$) from the co-located LSM6DSOX IMU. Confirms that phase steps during `30–68 s`, `72–104 s`, and `110–135 s` occur under quasi-static isometric conditions ($\sim 1^\circ/\text{s}$), while sharp gyroscope spikes (`69 s`, `106 s`, `137 s`) mark macroscopic posture transitions.
 4. **Inter-Axis Phase Coherency (XYZ Vector Stability):** Differential lock-in phase between accelerometer axes ($\Delta\phi_{XY} = \phi_X - \phi_Y$, $\Delta\phi_{YZ} = \phi_Y - \phi_Z$). Cancels common-mode sensor translation and acts as an instantaneous geometric posture signature.
 5. **Acoustic Reaction Speed (Phase Velocity):** Time derivative $|\text{d}\phi/\text{d}t|$ ($\text{rad/s}$), highlighting rapid mechanical state transitions at contraction onset/release.
