@@ -1,6 +1,9 @@
 # Local development server / experimental UI (tracked separately)
 server/
 microresonance_server/
+prior_art/
+123/
+Archive.zip
 
 # Python virtual environments and caches
 .venv/

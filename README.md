@@ -1,13 +1,19 @@
-# Microresonance: Active Acoustic Lock-In Probing of the Muscle Waveguide
+# Microresonance: Wireless 802.11 TSF-Coherent Active Acoustic Probing of the Skeletal Waveguide
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24533996.svg)](https://doi.org/10.5281/zenodo.24533996)
+[![Patent](https://img.shields.io/badge/WIPO-WO%2F2026%2F229867-blueviolet)](https://patentscope.wipo.int/search/en/detail.jsf?docId=WO2026229867)
+[![Preprint](https://img.shields.io/badge/Preprint-4--Page%20IEEE%20PDF-red)](paper/microresonance_preprint_draft.pdf)
 [![PlatformIO](https://img.shields.io/badge/Firmware-ESP32--S3%20%7C%20PlatformIO-orange)](microresonance_receiver/)
 [![Python](https://img.shields.io/badge/Analysis-Python%203.10%2B-blue)](scripts/)
-[![Carrier](https://img.shields.io/badge/Carrier-500%20Hz%20TSF--Locked-success)](microresonance_transceiver/)
 [![Data](https://img.shields.io/badge/Raw%20Telemetry-JSONL%20Included-informational)](physio_raw_20260514_175320.jsonl)
 
-**Microresonance** is an experimental non-invasive neuromuscular interface that extracts voluntary motor intent by measuring **active acoustic impedance and phase shift** across skeletal muscle rather than passive electrical potentials (sEMG).
+**Microresonance** is an experimental non-invasive neuromuscular interface (`< $100` commodity BOM) that extracts voluntary motor intent and limb posture by probing the **skeletal waveguide (cortical bone) shunt-loaded by tunable viscoelastic muscle-tendon resonators** rather than measuring passive electrical potentials (sEMG).
 
-By injecting a phase-continuous **500 Hz mechanical carrier** into the limb and performing coherent **quadrature (I/Q) lock-in demodulation** synchronized via hardware 802.11 Wi-Fi **TSF (Timing Synchronization Function)** clocks (`< 2 µs` jitter), the system achieves a stable acoustic phase **hard-lock** (`99.9%` lock stability) and repeatable isometric step responses akin to Sonomyography (SMG) — while operating dry, through clothing, and remaining resilient to orthostatic postural noise that saturates conventional surface EMG.
+By injecting a phase-continuous **500 Hz mechanical carrier** at the lumbar waist belt and performing coherent **quadrature (I/Q) lock-in demodulation** at a distal ankle strap (`~0.9 m` skeletal path) synchronized via hardware 802.11 Wi-Fi **TSF (Timing Synchronization Function)** clocks (`< 2 µs` jitter), the system achieves a resting phase noise floor of **`3.01°`** (`99.9%` lock stability, `30 ms` frame latency) while operating dry, through clothing, and remaining resilient to orthostatic postural load that saturates conventional surface EMG (`20.7×` baseline floor surge).
+
+- **Full 4-Page IEEE Preprint:** [`paper/microresonance_preprint_draft.pdf`](paper/microresonance_preprint_draft.pdf) ([LaTeX source](paper/microresonance_preprint_draft.tex))
+- **Zenodo Archival Release (DOI):** [10.5281/zenodo.24533996](https://doi.org/10.5281/zenodo.24533996)
+- **International Patent Publication:** [WO/2026/229867 (PCT/IB2026/054169)](https://patentscope.wipo.int/search/en/detail.jsf?docId=WO2026229867) (priority Apr–May 2025, published Nov 5, 2026)
 
 ---
 
@@ -20,13 +26,14 @@ By injecting a phase-continuous **500 Hz mechanical carrier** into the limb and 
 | **Ultrasound SMG** | MHz acoustic echogenicity / B-mode cross-section | Acoustic gel, rigid transducer alignment | **High** — measures mechanical deformation directly | High (piezo array, high-voltage pulser, FPGA/DSP) |
 | **Microresonance (This Work)** | **Coherent phase velocity & damping of a 500 Hz carrier** | **Dry strap / works through clothing** | **High** — orthogonal to electrical recruitment noise and low-frequency motion ($<50\text{ Hz}$) | **Low** (ESP32-S3, MEMS ADXL355, I2S DAC exciter) |
 
-### Physical Principle
+### Physical Principle: Skeletal Waveguide with Muscle-Impedance Loading
 
-Skeletal muscle behaves as a dispersive viscoelastic waveguide. When a muscle transitions from relaxation to isometric contraction, cross-bridge formation increases both its **transverse/axial stiffness (shear modulus $G$)** and **viscous damping**.
-- A shift in shear modulus alters the acoustic phase velocity $v_p = \sqrt{G / \rho}$, producing a deterministic **phase shift ($\Delta\phi$)** over a fixed emitter–receiver baseline $L$:
-  $$\Delta \phi = 2\pi f_0 L \left( \frac{1}{v_p(\text{relaxed})} - \frac{1}{v_p(\text{contracted})} \right)$$
-- Simultaneously, increased fiber density attenuates the carrier amplitude (**acoustic transparency / magnitude drop**).
-- Because the receiver mixes the 4000 Hz accelerometer stream strictly at $f_0 = 500\text{ Hz}$ against a TSF-synchronized local oscillator, low-frequency macro-movements ($0\text{–}50\text{ Hz}$) and stochastic electrical motor-unit firing (sEMG interference) fall outside the narrow lock-in passband.
+At $500\text{ Hz}$, shear waves in soft skeletal muscle attenuate within centimeters, whereas cortical bone conducts mechanical waves across the entire limb (`~0.9 m`, waist belt to distal ankle / lateral malleolus) with low loss. We model the limb as a **skeletal waveguide (bone) shunt-loaded by tunable viscoelastic resonators (muscles and tendons)** — building on the biomechanical *"muscle tuning"* paradigm (Nigg & Wakeling, 2001) and analogous to damping a guitar string:
+- Letting $Z_0 > 0$ denote the bone waveguide characteristic impedance and $Z_m(\omega; G, \eta) = R_m(\eta) + j(\omega m_{\text{eff}} - k(G)/\omega)$ the coupled muscle–tendon load impedance, the loaded transfer function and contraction phase shift follow:
+  $$H(\omega) = \frac{H_0(\omega)}{1 + \alpha\, Z_m(\omega; G, \eta)/Z_0}, \qquad \Delta\phi = \arg\!\frac{H_{\text{contracted}}(\omega)}{H_{\text{relaxed}}(\omega)}$$
+- Above the tens-of-Hz soft-tissue resonance ($\omega > \omega_0$), increasing muscle stiffness $k(G)\uparrow$ produces a bounded **phase lead ($\Delta(\arg H) = +36^\circ\text{ to }+67^\circ$)** paired with a **`+11–16%` transmission gain ($|H|\uparrow$)**.
+- Simultaneously, hip/knee joint angles alter boundary coupling between bone segments, producing sharp **3D wave polarization shifts ($\Delta\phi_{XY}, \Delta\phi_{YZ}$)** that classify limb posture (`100%` holdout accuracy, $N=1$, zero IMU) orthogonally to voluntary isometric effort.
+- Because the receiver mixes the $4000\text{ Hz}$ accelerometer stream coherently at $f_0 = 500\text{ Hz}$ against a TSF-synchronized local oscillator, low-frequency motion ($<50\text{ Hz}$) and stochastic sEMG firing fall outside the narrow lock-in passband.
 
 ---
 
@@ -103,8 +110,15 @@ microresonance/
 │   ├── include/                      # RawSyncPacket (0x4D58) wire format, DSP task & ADS8681 headers
 │   ├── src/                          # Dual-core ADXL355 SPI + LSM6DSOX I2C + sEMG capture & UDP streamer
 │   └── platformio.ini                # Build config for ESP32-S3 (FH4R2)
-├── scripts/                          # Python Signal Interpretation & Visualization Suite
+├── paper/                            # 4-Page IEEE Preprint (LaTeX, 300-DPI Figures, PDF & Build Script)
+│   ├── microresonance_preprint_draft.pdf  # Compiled 4-page IEEE preprint
+│   ├── microresonance_preprint_draft.tex  # Full LaTeX source
+│   ├── build_pdf.sh                  # Reproducible single-command PDF build script (Tectonic)
+│   └── figures/                      # Publication figures (300 DPI)
+├── scripts/                          # Python Signal Interpretation, Verification & Figure Suite
 │   ├── analyze_session.py            # Reproduces the 7-panel plot & regime metrics from raw JSONL
+│   ├── verify_paper_claims.py        # Independent 28/28 numerical audit of all paper claims vs. raw JSONL
+│   ├── generate_paper_figures.py     # Reproduces all 4 publication-grade 300-DPI figures
 │   └── lockin_dsp_reference.py       # Reference RawSyncPacket parser & TSF-coherent I/Q demodulator
 ├── physio_raw_20260514_175320.jsonl  # Raw multi-modal experimental dataset (5,136 frames, 153.7s)
 ├── 1778779569118.png                 # Generated 7-panel visualization from Session 175320
@@ -126,8 +140,17 @@ python3 scripts/analyze_session.py \
     --input physio_raw_20260514_175320.jsonl \
     --output 1778779569118.png
 
-# 3. Run the mathematical self-test of the TSF-coherent I/Q lock-in demodulator
+# 3. Run the independent 28/28 numerical verification audit of all preprint claims
+python3 scripts/verify_paper_claims.py
+
+# 4. Regenerate all 4 publication-grade 300-DPI figures (paper/figures/)
+python3 scripts/generate_paper_figures.py
+
+# 5. Run the mathematical self-test of the TSF-coherent I/Q lock-in demodulator
 python3 scripts/lockin_dsp_reference.py --self-test
+
+# 6. Rebuild the 4-page IEEE preprint PDF from LaTeX source (uses Tectonic)
+./paper/build_pdf.sh
 ```
 
 ### Sample Console Output (`scripts/analyze_session.py`)
@@ -165,6 +188,21 @@ Key Comparative Findings (Seated vs. Standing Orthostatic Load):
   3. **Single-Strap Wearable Integration:** Miniaturizing the exciter and ADXL355 detector into a unified dry elastomer band for exoskeleton, prosthetics, and AR/VR human-computer interaction.
 
 ---
+
+## Citation
+
+If you use this hardware architecture, dataset, or analysis scripts in your research, please cite:
+
+```bibtex
+@misc{fatkulin2026microresonance,
+  author       = {Amir Fatkulin},
+  title        = {Microresonance: Wireless 802.11 TSF-Coherent Active Acoustic Probing of the Skeletal Waveguide for Real-Time Isometric Motor Intent and Posture Decoupling},
+  year         = {2026},
+  publisher    = {Zenodo},
+  doi          = {10.5281/zenodo.24533996},
+  url          = {https://doi.org/10.5281/zenodo.24533996}
+}
+```
 
 ## Recommended GitHub Repository Topics / Tags
 
